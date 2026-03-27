@@ -402,24 +402,24 @@ install_chaotic_aur() {
 
 install_gaming_nvidia() {
     print_header "INSTALANDO UTILIDADES GAMING (NVIDIA)"
+    echo -e "1\ns" | sudo pacman -S --needed steam || true
     instalar_paquetes dxvk protonplus spotify discord gamemode proton-ge-custom-bin gedit
-    echo -e "1" | sudo pacman -S --needed steam || true
     print_success "Herramientas Gaming instaladas."
     sleep 2
 }
 
 install_gaming_intel() {
     print_header "INSTALANDO UTILIDADES GAMING (INTEL)"
+    echo -e "7\ns" | sudo pacman -S --needed steam || true
     instalar_paquetes dxvk protonplus spotify discord gamemode proton-ge-custom-bin gedit
-    echo -e "7" | sudo pacman -S --needed steam || true
     print_success "Herramientas Gaming instaladas."
     sleep 2
 }
 
 install_gaming_amd() {
     print_header "INSTALANDO UTILIDADES GAMING (AMD)"
+    echo -e "12\ns" | sudo pacman -S --needed steam || true
     instalar_paquetes dxvk protonplus spotify discord gamemode proton-ge-custom-bin gedit
-    echo -e "12" | sudo pacman -S --needed steam || true
     print_success "Herramientas Gaming instaladas."
     sleep 2
 }
