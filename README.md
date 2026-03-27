@@ -68,3 +68,5 @@ chmod +x GekkoApp.sh
 ---
 
 Desarrollado con ❤️ para la comunidad de Linux.
+
+---
