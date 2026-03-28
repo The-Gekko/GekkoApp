@@ -284,9 +284,11 @@ install_zsh_starship() {
 # =====================================
 # HISTORIAL
 # =====================================
+
 HISTFILE=~/.zsh_history
 HISTSIZE=100000
 SAVEHIST=100000
+
 setopt APPEND_HISTORY
 setopt INC_APPEND_HISTORY
 setopt SHARE_HISTORY
@@ -298,19 +300,27 @@ setopt HIST_VERIFY
 # =====================================
 # COMPLETION
 # =====================================
+
 autoload -Uz compinit
 fpath=(~/.zsh/zsh-completions/src $fpath)
 compinit -d ~/.zcompdump
+
+# Ignorar mayúsculas/minúsculas en autocompletado
 zstyle ':completion:*' matcher-list 'm:{a-z}={A-Za-z}' 'r:|[._-]=* r:|=*'
+
 setopt AUTO_MENU
 setopt COMPLETE_IN_WORD
 setopt ALWAYS_TO_END
 
+#zmodload zsh/zprof
+
 # =====================================
 # ALIASES
 # =====================================
+
 alias deit="bash <(curl -sL https://raw.githubusercontent.com/iJoseG/Mscripts/refs/heads/main/datetoday.sh)"
 alias actrepo="bash <(curl -sL https://raw.githubusercontent.com/iJoseG/Mscripts/refs/heads/main/actrepo.sh)"
+
 alias l='eza -l --icons --color=auto --group-directories-first'
 alias ls='eza --icons --color=auto --group-directories-first'
 alias ll='eza -l --icons --color=auto --group-directories-first'
@@ -318,35 +328,60 @@ alias la='eza -la --icons --color=auto --group-directories-first'
 alias lt='eza --tree --icons --color=auto --group-directories-first'
 
 # =====================================
-# PROMPT Y PLUGINS
+# PROMPT
 # =====================================
+
 eval "$(starship init zsh)"
 
+# =====================================
+# PLUGINS
+# =====================================
+
+# Autosuggestions
 source ~/.zsh/zsh-autosuggestions/zsh-autosuggestions.zsh
+
+# History substring
 source ~/.zsh/zsh-history-substring-search/zsh-history-substring-search.zsh
 bindkey '^[[A' history-substring-search-up
 bindkey '^[[B' history-substring-search-down
 
-[ -f /usr/share/fzf/key-bindings.zsh ] && source /usr/share/fzf/key-bindings.zsh
-[ -f /usr/share/fzf/completion.zsh ] && source /usr/share/fzf/completion.zsh
+# History search
+source /usr/share/fzf/key-bindings.zsh
+source /usr/share/fzf/completion.zsh
 
+# Syntax highlighting
 source ~/.zsh/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
+
+# z navigation
 source ~/.zsh/z/z.sh
 
 # =====================================
 # KEYBINDINGS
 # =====================================
+
 stty -ixon
+
+# 
 bindkey '^Q' kill-whole-line
+
+# Limpiar solo desde cursor hacia el inicio
 bindkey '^U' backward-kill-line
+
+# Limpiar desde cursor hasta el final
 bindkey '^K' kill-line
+
+# Navegar por palabras
 bindkey '^[[1;5C' forward-word
 bindkey '^[[1;5D' backward-word
 
+
 # =====================================
-# FASTFETCH
+# FASTFETCH SOLO INTERACTIVO (by The-Gekko)
 # =====================================
+
 [[ $- == *i* ]] && fastfetch
+
+# ZSH Config by Bluemoon
 EOF
 
     print_info "Estableciendo preset de starship..."
@@ -400,6 +435,105 @@ install_chaotic_aur() {
     sleep 2
 }
 
+install_bauh() {
+    print_header "INSTALANDO TIENDA BAUH (AUR)"
+    instalar_paquetes bauh
+    
+    print_info "Buscando archivo gems.py de bauh..."
+    # Buscar dinámicamente la versión de python para evitar fallos futuros
+    local BAUH_GEMS=$(ls /usr/lib/python*/site-packages/bauh/view/core/gems.py 2>/dev/null | head -n 1)
+    
+    if [ -n "$BAUH_GEMS" ] && [ -f "$BAUH_GEMS" ]; then
+        print_info "Aplicando parche de compatibilidad en: $BAUH_GEMS"
+        sudo tee "$BAUH_GEMS" > /dev/null << 'EOF'
+import inspect
+import os
+import pkgutil
+import importlib.util
+from logging import Logger
+from typing import List, Generator
+
+from bauh import __app_name__, ROOT_DIR
+from bauh.api.abstract.controller import SoftwareManager, ApplicationContext
+from bauh.view.util import translation
+
+FORBIDDEN_GEMS_FILE = f'/etc/{__app_name__}/gems.forbidden'
+
+
+def find_manager(member):
+    if not isinstance(member, str):
+        if inspect.isclass(member) and inspect.getmro(member)[1].__name__ == 'SoftwareManager':
+            return member
+        elif inspect.ismodule(member):
+            for name, mod in inspect.getmembers(member):
+                manager_found = find_manager(mod)
+                if manager_found:
+                    return manager_found
+
+
+def read_forbidden_gems() -> Generator[str, None, None]:
+    try:
+        with open(FORBIDDEN_GEMS_FILE) as f:
+            forbidden_lines = f.readlines()
+
+        for line in forbidden_lines:
+            clean_line = line.strip()
+
+            if clean_line and not clean_line.startswith('#'):
+                yield clean_line
+
+    except FileNotFoundError:
+        pass
+
+
+def load_managers(locale: str, context: ApplicationContext, config: dict, default_locale: str, logger: Logger) -> List[SoftwareManager]:
+    managers = []
+
+    forbidden_gems = {gem for gem in read_forbidden_gems()}
+
+    for f in os.scandir(f'{ROOT_DIR}/gems'):
+        if f.is_dir() and f.name != '__pycache__':
+
+            if f.name in forbidden_gems:
+                logger.warning(f"gem '{f.name}' could not be loaded because it was marked as forbidden in '{FORBIDDEN_GEMS_FILE}'")
+                continue           
+ 
+            spec = importlib.util.find_spec(f'bauh.gems.{f.name}.controller')
+            loader = spec.loader if spec else None
+            
+            if loader:
+                module = loader.load_module()
+
+                manager_class = find_manager(module)
+
+                if manager_class:
+                    if locale:
+                        locale_path = f'{f.path}/resources/locale'
+
+                        if os.path.exists(locale_path):
+                            context.i18n.current.update(translation.get_locale_keys(locale, locale_path)[1])
+
+                            if default_locale and context.i18n.default:
+                                context.i18n.default.update(translation.get_locale_keys(default_locale, locale_path)[1])
+
+                    man = manager_class(context=context)
+
+                    if config['gems'] is None:
+                        man.set_enabled(man.is_default_enabled())
+                    else:
+                        man.set_enabled(f.name in config['gems'])
+
+                    managers.append(man)
+
+    return managers
+EOF
+        print_success "El archivo gems.py de Bauh fue sobrescrito con el parche correctamente."
+    else
+        print_warning "No se encontró el archivo gems.py de bauh. Saltando parche..."
+    fi
+    sleep 2
+}
+
 install_gaming_nvidia() {
     print_header "INSTALANDO UTILIDADES GAMING (NVIDIA)"
     echo -e "1\ns" | sudo pacman -S --needed steam || true
@@ -428,6 +562,10 @@ install_gaming_amd() {
 #                   MENÚ INTERACTIVO                   #
 # ==================================================== #
 
+# Instalación obligatoria y primordial de Chaotic AUR
+print_info "Revisando configuración de repositorios Chaotic AUR..."
+install_chaotic_aur
+
 while true; do
     print_title
     
@@ -440,7 +578,8 @@ while true; do
     echo -e "  ${C_CYAN}5)${C_DEF} 🎮 Utilidades Gaming (Steam, spotify, discord) ${C_BLUE}[INTEL]${C_DEF}"
     echo -e "  ${C_CYAN}6)${C_DEF} 🎮 Utilidades Gaming (Steam, spotify, discord) ${C_RED}[AMD]${C_DEF}"
     echo -e "  ${C_CYAN}7)${C_DEF} 📦 Agregar repositorios Chaotic AUR"
-    echo -e "  ${C_CYAN}8)${C_DEF} ✨ Instalar TODO ${C_YELLOW}(Sin módulos Gaming/Chaotic AUR)${C_DEF}"
+    echo -e "  ${C_CYAN}8)${C_DEF} 🛍️ Instalar Tienda Bauh (Parcheado)"
+    echo -e "  ${C_CYAN}9)${C_DEF} ✨ Instalar TODO ${C_YELLOW}(Terminal, Hyprland, Niri, Bauh)${C_DEF}"
     echo -e "  ${C_RED}0)${C_DEF} ❌ Salir\n"
     
     echo -e "${C_CYAN}──────────────────────────────────────────────────────────────${C_DEF}"
@@ -455,12 +594,14 @@ while true; do
         5) install_gaming_intel ;;
         6) install_gaming_amd ;;
         7) install_chaotic_aur ;;
-        8) 
+        8) install_bauh ;;
+        9) 
            install_zsh_starship
            install_hyprland
            install_niri
+           install_bauh
            print_success "¡El sistema global se configuró con éxito!"
-           print_warning "Nota: Ejecuta módulos de Gaming y Chaotic AUR por separado según tus necesidades."
+           print_warning "Nota: Ejecuta módulos de Gaming por separado según tus necesidades."
            sleep 4
            ;;
         0) 
@@ -468,7 +609,7 @@ while true; do
            exit 0 
            ;;
         *) 
-           print_warning "Opción no válida. Por favor, selecciona un número del 0 al 8."
+           print_warning "Opción no válida. Por favor, selecciona un número del 0 al 9."
            sleep 2
            ;;
     esac
