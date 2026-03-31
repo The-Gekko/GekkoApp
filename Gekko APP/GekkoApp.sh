@@ -381,7 +381,7 @@ bindkey '^[[1;5D' backward-word
 
 [[ $- == *i* ]] && fastfetch
 
-# ZSH Config by Bluemoon
+# ZSH Config by iBlueMoon
 EOF
 
     print_info "Estableciendo preset de starship..."
