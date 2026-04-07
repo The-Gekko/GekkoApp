@@ -12,7 +12,7 @@ Este script facilita la transición a un entorno personalizado, encargándose de
 - **Zsh + Plugins:** Instalación automática de `zsh` junto con:
   - `zsh-syntax-highlighting` (resaltado de comandos).
   - `zsh-autosuggestions` (sugerencias basadas en historial).
-  - Temas populares (Powerlevel10k / Oh My Zsh).
+  - Integraciones personalizadas y optimización de rendimiento.
 
 ### 🛠️ Ecosistema Wayland (Hyprland & Niri)
 
@@ -33,40 +33,53 @@ Optimización completa según tu hardware para que solo tengas que abrir Steam y
 
 ---
 
-## 🚀 Instalación
+## 👥 Equipo y Colaboradores
 
-Para ejecutar la herramienta, simplemente clona el repositorio y lanza el script principal:
+Este proyecto es posible gracias al trabajo conjunto de:
+
+| Colaborador   | Rol y Responsabilidades                                                                             |
+| :------------ | :-------------------------------------------------------------------------------------------------- |
+| **The-Gekko** | Desarrollador Principal, Lógica de Sistema en Rust y Herramientas Gaming.                           |
+| **𝓲𝓑𝓵𝓾𝓮𝓜𝓸𝓸𝓷** | Especialista en Shell. Encargado de la modificación de **Zsh**, integraciones y gestión de plugins. |
+
+---
+
+## 🚀 Instalación (Compilación desde fuente)
+
+Al estar desarrollado en **Rust**, garantizamos velocidad y seguridad. Para compilar y ejecutar la herramienta:
 
 ```bash
+# Clonar el repositorio
 git clone https://github.com/The-Gekko/GekkoApp.git
 cd GekkoApp
-chmod +x GekkoApp.sh
-./GekkoApp.sh
+
+# Compilar la versión de producción
+cargo build --release
+
+# Ejecutar el binario
+./target/release/gekkoapp
 ```
 
 > [\!IMPORTANT]
-> Se recomienda ejecutar este script en una instalación limpia o tener un backup de tus archivos de configuración actuales (`.config`).
+> Se recomienda ejecutar esta herramienta en una instalación limpia o tener un backup de tus archivos de configuración actuales (`.config`).
 
 ---
 
 ## 🛠️ Requisitos
 
 - Una distribución basada en **Arch Linux** (recomendado).
-- Conexión a internet estable.
-- Permisos de sudo.
+- **Rust & Cargo** instalados para la compilación.
+- Conexión a internet estable y permisos de **sudo**.
 
 ---
 
-## 📸 Screenshots
-
-![Foto 1](image.png)
+## 📸 Implementaciones
 
 | Terminal (Kitty + Zsh) | Gaming Setup |
 | :--------------------- | :----------- |
-|                        |              |
+
+| _(Zsh by 𝓲𝓑𝓵𝓾𝓮𝓜𝓸𝓸𝓷)_
 
 ---
 
-Desarrollado con ❤️ para la comunidad de Linux.
-
----
+Desarrollado con ❤️ por **The-Gekko** y colaboradores.
