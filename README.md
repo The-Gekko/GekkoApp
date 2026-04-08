@@ -80,6 +80,8 @@ cargo build --release
 
 | _(Zsh by 𝓲𝓑𝓵𝓾𝓮𝓜𝓸𝓸𝓷)_
 
+![image.png](image.png)
+
 ---
 
 Desarrollado con ❤️ por **The-Gekko** y colaboradores.

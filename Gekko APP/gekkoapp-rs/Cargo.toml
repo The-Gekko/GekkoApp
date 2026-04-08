@@ -1,0 +1,19 @@
+[package]
+name = "gekkoapp"
+version = "1.0.0"
+edition = "2021"
+authors = ["The-Gekko"]
+description = "GekkoApp - Arch Linux Post-Install & Config Tool"
+
+[[bin]]
+name = "gekkoapp"
+path = "src/main.rs"
+
+[dependencies]
+crossterm = "0.28"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
