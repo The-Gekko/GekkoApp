@@ -74,7 +74,12 @@ cargo build --release
 - **Arch Linux** o derivados.
 - Conexión a internet estable.
 - Privilegios de **sudo**.
-  ![image.png](image.png)
+
+---
+
+## 📸 Proyecto
+
+![image.png](image.png)
 
 ---
 
