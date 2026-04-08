@@ -1,75 +1,80 @@
-# 🚀 Linux Personalizer & Gaming Setup
+# 🚀 GekkoApp: Linux Personalizer & Gaming Setup
 
-Una herramienta integral diseñada para automatizar la configuración de tu entorno Linux, optimizar tu terminal y dejar tu sistema listo para el gaming y la productividad.
+**GekkoApp** ha evolucionado. Lo que empezó como un script de automatización ahora es una herramienta robusta desarrollada en **Rust**, diseñada para ofrecer la máxima velocidad, seguridad y una experiencia minimalista en la terminal.
 
 ## ✨ Características Principales
 
-Este script facilita la transición a un entorno personalizado, encargándose de las tareas tediosas por ti:
+Esta herramienta automatiza la configuración de tu entorno, evitando tareas tediosas y errores manuales:
 
-### 💻 Terminal & Shell
+### 💻 Terminal & Shell (Optimizado por 𝓲𝓑𝓵𝓾𝓮𝓜𝓸𝓸𝓷)
 
-- **Kitty Terminal:** Configuración optimizada con soporte para ligaduras y temas.
-- **Zsh + Plugins:** Instalación automática de `zsh` junto con:
-  - `zsh-syntax-highlighting` (resaltado de comandos).
-  - `zsh-autosuggestions` (sugerencias basadas en historial).
-  - Integraciones personalizadas y optimización de rendimiento.
+- **Kitty Terminal:** Configuración avanzada con soporte para ligaduras y temas.
+- **Zsh + Plugins:** Instalación automática y tuning de:
+  - `zsh-syntax-highlighting` (resaltado en tiempo real).
+  - `zsh-autosuggestions` (inteligencia basada en historial).
+  - Plugins exclusivos para productividad máxima.
 
 ### 🛠️ Ecosistema Wayland (Hyprland & Niri)
 
 - Instalación de herramientas esenciales para **Hyprland** y **Niri**.
-- Configuración de barras de estado, notificaciones y selectores de aplicaciones.
+- Setup de barras de estado, notificaciones y lanzadores.
 
 ### 📦 Repositorios & Paquetes
 
-- **Chaotic-AUR:** Configuración rápida del repositorio para obtener binarios pre-compilados y kernels optimizados sin esperar horas de compilación.
+- **Chaotic-AUR:** Integración rápida para obtener kernels optimizados y binarios pre-compilados (ahorra horas de compilación).
 
-### 🎮 Gaming & Drivers
+### 🎮 Gaming & Drivers (Power by The-Gekko)
 
-Optimización completa según tu hardware para que solo tengas que abrir Steam y jugar:
-
-- **NVIDIA:** Instalación de drivers propietarios y parches de Wayland.
-- **AMD/Intel:** Configuración de Mesa y drivers Vulkan.
-- **Herramientas:** Instalación de Gamemode, Wine-staging, Lutris y dependencias necesarias.
+- **Detección de Hardware:** Configuración específica para **NVIDIA**, **AMD** o **Intel**.
+- **Stack Gaming:** Gamemode, Wine-staging, Lutris y dependencias de Vulkan.
 
 ---
 
 ## 👥 Equipo y Colaboradores
 
-Este proyecto es posible gracias al trabajo conjunto de:
-
-| Colaborador   | Rol y Responsabilidades                                                                             |
-| :------------ | :-------------------------------------------------------------------------------------------------- |
-| **The-Gekko** | Desarrollador Principal, Lógica de Sistema en Rust y Herramientas Gaming.                           |
-| **𝓲𝓑𝓵𝓾𝓮𝓜𝓸𝓸𝓷** | Especialista en Shell. Encargado de la modificación de **Zsh**, integraciones y gestión de plugins. |
+| Colaborador   | Rol y Responsabilidades                                                    |
+| :------------ | :------------------------------------------------------------------------- |
+| **The-Gekko** | Arquitectura en Rust, Lógica de Sistema y Optimización Gaming.             |
+| **𝓲𝓑𝓵𝓾𝓮𝓜𝓸𝓸𝓷** | Especialista en Shell. Diseño de experiencia Zsh e integración de plugins. |
 
 ---
 
-## 🚀 Instalación (Compilación desde fuente)
+## 📦 Instalación
 
-Al estar desarrollado en **Rust**, garantizamos velocidad y seguridad. Para compilar y ejecutar la herramienta:
+### 1\. Opción Rápida (Recomendado)
+
+Descarga el binario ya compilado desde nuestra sección de **[Releases]**.
 
 ```bash
-# Clonar el repositorio
+# Dale permisos de ejecución
+chmod +x GekkoApp
+
+# Ejecútalo
+./GekkoApp
+```
+
+### 2\. Compilación desde Fuente
+
+Si prefieres compilarlo tú mismo, asegúrate de tener el entorno de Rust instalado:
+
+```bash
 git clone https://github.com/The-Gekko/GekkoApp.git
 cd GekkoApp
-
-# Compilar la versión de producción
 cargo build --release
-
-# Ejecutar el binario
 ./target/release/gekkoapp
 ```
 
 > [\!IMPORTANT]
-> Se recomienda ejecutar esta herramienta en una instalación limpia o tener un backup de tus archivos de configuración actuales (`.config`).
+> Se recomienda ejecutar esta herramienta en una instalación limpia o realizar un backup de tu carpeta `~/.config` antes de empezar.
 
 ---
 
 ## 🛠️ Requisitos
 
-- Una distribución basada en **Arch Linux** (recomendado).
-- **Rust & Cargo** instalados para la compilación.
-- Conexión a internet estable y permisos de **sudo**.
+- **Arch Linux** o derivados.
+- Conexión a internet estable.
+- Privilegios de **sudo**.
+  ![image.png](image.png)
 
 ---
 
@@ -78,10 +83,12 @@ cargo build --release
 | Terminal (Kitty + Zsh) | Gaming Setup |
 | :--------------------- | :----------- |
 
-| _(Zsh by 𝓲𝓑𝓵𝓾𝓮𝓜𝓸𝓸𝓷)_
-
-![image.png](image.png)
+\*Configuración de Zsh y plugins por **𝓲𝓑𝓵𝓾𝓮𝓜𝓸𝓸𝓷\***.
 
 ---
 
-Desarrollado con ❤️ por **The-Gekko** y colaboradores.
+## 📄 Licencia
+
+Este proyecto está bajo la Licencia **MIT**. Consulta el archivo `LICENSE` para más detalles.
+
+Desarrollado con ❤️ para la comunidad de Linux por **The-Gekko** y colaboradores.
