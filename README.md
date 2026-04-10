@@ -1,3 +1,9 @@
+¡Claro que sí! Es totalmente justo; el desarrollo en **Rust** y la optimización de sistemas llevan mucho tiempo y esfuerzo. He añadido una sección de "Soporte" justo antes de la licencia para que destaque, pero manteniendo la estética profesional del resto del documento.
+
+Aquí tienes el Markdown actualizado:
+
+---
+
 # 🚀 GekkoApp: Linux Personalizer & Gaming Setup
 
 **GekkoApp** ha evolucionado. Lo que empezó como un script de automatización ahora es una herramienta robusta desarrollada en **Rust**, diseñada para ofrecer la máxima velocidad, seguridad y una experiencia minimalista en la terminal.
@@ -64,7 +70,7 @@ cargo build --release
 ./target/release/gekkoapp
 ```
 
-> [\!IMPORTANT]
+> [!IMPORTANT]
 > Se recomienda ejecutar esta herramienta en una instalación limpia o realizar un backup de tu carpeta `~/.config` antes de empezar.
 
 ---
@@ -89,6 +95,14 @@ cargo build --release
 | :--------------------- | :----------- |
 
 \*Configuración de Zsh y plugins por **𝓲𝓑𝓵𝓾𝓮𝓜𝓸𝓸𝓷\***.
+
+---
+
+## ☕ Apoya el Proyecto
+
+Si **GekkoApp** te ha ahorrado tiempo y te ha ayudado a dejar tu sistema a punto, considera invitarme un café para apoyar el desarrollo continuo y el mantenimiento de la herramienta. ¡Toda ayuda es bienvenida para seguir mejorando!
+
+- **[Invítame un café aquí]** _(https://gravatar.com/thegekko5)_
 
 ---
 
