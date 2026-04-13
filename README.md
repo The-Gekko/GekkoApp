@@ -1,9 +1,3 @@
-¡Claro que sí! Es totalmente justo; el desarrollo en **Rust** y la optimización de sistemas llevan mucho tiempo y esfuerzo. He añadido una sección de "Soporte" justo antes de la licencia para que destaque, pero manteniendo la estética profesional del resto del documento.
-
-Aquí tienes el Markdown actualizado:
-
----
-
 # 🚀 GekkoApp: Linux Personalizer & Gaming Setup
 
 **GekkoApp** ha evolucionado. Lo que empezó como un script de automatización ahora es una herramienta robusta desarrollada en **Rust**, diseñada para ofrecer la máxima velocidad, seguridad y una experiencia minimalista en la terminal.
