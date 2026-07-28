@@ -514,12 +514,18 @@ fn desinstalar_paquetes(paquetes: &[&str]) -> bool {
 //  Fastfetch config
 // ─────────────────────────────────────────────────────────────────────────────
 
-fn configurar_fastfetch() {
+fn configurar_fastfetch() -> bool {
     print_info("Aplicando el tema universal de Fastfetch...");
 
     let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
     let config_dir = format!("{}/.config/fastfetch", home);
-    let _ = std::fs::create_dir_all(&config_dir);
+    if let Err(e) = std::fs::create_dir_all(&config_dir) {
+        print_err(&format!(
+            "No se pudo crear el directorio de fastfetch: {}",
+            e
+        ));
+        return false;
+    }
 
     let config = format!(
         r#"{{
@@ -576,40 +582,51 @@ fn configurar_fastfetch() {
     if Path::new(&config_path).exists() {
         print_info(&format!("Se sobrescribirá el archivo {}", config_path));
         if !confirm_action("¿Deseas sobrescribir config.jsonc de fastfetch?") {
-            return;
+            return false;
         }
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        let _ = std::fs::copy(
+        if let Err(e) = std::fs::copy(
             &config_path,
             format!("{}.backup_{}", config_path, timestamp),
-        );
+        ) {
+            print_err(&format!("Fallo al respaldar config.jsonc: {}", e));
+            return false;
+        }
     }
 
-    let _ = std::fs::write(&config_path, config);
+    if let Err(e) = std::fs::write(&config_path, config) {
+        print_err(&format!("Fallo al escribir config.jsonc: {}", e));
+        return false;
+    }
     print_ok("Configuración .jsonc de Fastfetch generada.");
 
     // Copy image if available
     let img_dest = format!("{}/Anime Render.png", config_dir);
     if !Path::new(&img_dest).exists() {
         if Path::new("./Anime Render.png").exists() {
-            let _ = std::fs::copy("./Anime Render.png", &img_dest);
-            print_ok("Imagen 'Anime Render.png' copiada a ~/.config/fastfetch/");
+            if let Err(e) = std::fs::copy("./Anime Render.png", &img_dest) {
+                print_warn(&format!("No se pudo copiar la imagen: {}", e));
+            } else {
+                print_ok("Imagen 'Anime Render.png' copiada a ~/.config/fastfetch/");
+            }
         } else {
             print_warn(
                 "Copia tu imagen 'Anime Render.png' en ~/.config/fastfetch/ para el logo kitty.",
             );
         }
     }
+
+    true
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Install functions
 // ─────────────────────────────────────────────────────────────────────────────
 
-fn install_zsh_starship() {
+fn install_zsh_starship() -> bool {
     print_header("INSTALANDO ZSH Y TERMINAL BONITA  (by GekkoApp)");
     thread::sleep(Duration::from_millis(500));
 
@@ -623,60 +640,19 @@ fn install_zsh_starship() {
         "fastfetch",
         "fzf",
         "ttf-jetbrains-mono-nerd",
+        "starship",
+        "zsh-autosuggestions",
+        "zsh-syntax-highlighting",
+        "zsh-history-substring-search",
+        "zsh-completions",
+        "zoxide",
     ]) {
-        return;
+        print_err("Fallo la instalación de dependencias base y plugins de ZSH.");
+        return false;
     }
 
-    run_shell("fc-cache -fv > /dev/null 2>&1");
-
-    print_info("Evaluando instalación de Starship...");
-    let (starship_ok, _) = run_shell_piped("command -v starship");
-    if !starship_ok {
-        print_info("Instalando Starship vía script oficial...");
-        if confirm_action("¿Deseas descargar e instalar Starship (starship.rs)?") {
-            fake_progress_bar("Descargando Starship", 30);
-            run_shell("curl -sS https://starship.rs/install.sh -o /tmp/install_starship.sh && sh /tmp/install_starship.sh -y && rm /tmp/install_starship.sh");
-        }
-    } else {
-        print_ok("Starship ya está instalado.");
-    }
-
-    print_info("Instalando complementos de ZSH...");
-    if confirm_action("¿Deseas clonar los complementos de ZSH en ~/.zsh?") {
-        run_shell("mkdir -p ~/.zsh");
-
-        let plugins = [
-            (
-                "zsh-autosuggestions",
-                "https://github.com/zsh-users/zsh-autosuggestions",
-            ),
-            (
-                "zsh-syntax-highlighting",
-                "https://github.com/zsh-users/zsh-syntax-highlighting",
-            ),
-            (
-                "zsh-history-substring-search",
-                "https://github.com/zsh-users/zsh-history-substring-search",
-            ),
-            (
-                "zsh-completions",
-                "https://github.com/zsh-users/zsh-completions",
-            ),
-            ("z", "https://github.com/rupa/z.git"),
-        ];
-
-        for (name, url) in &plugins {
-            let dest = format!("~/.zsh/{}", name);
-            let cmd = format!(
-                "[ ! -d {dest} ] && git clone {url} {dest} && echo 'clonado' || echo 'ya existe'"
-            );
-            let (_, out) = run_shell_piped(&cmd);
-            if out.contains("clonado") {
-                print_ok(&format!("{} instalado.", name));
-            } else {
-                print_ok(&format!("{} ya está clonado.", name));
-            }
-        }
+    if !run_shell("fc-cache -fv > /dev/null 2>&1") {
+        print_warn("Fallo al actualizar caché de fuentes (fc-cache).");
     }
 
     // .zshrc
@@ -701,7 +677,7 @@ setopt HIST_VERIFY
 # =====================================
 
 autoload -Uz compinit
-fpath=(~/.zsh/zsh-completions/src $fpath)
+fpath=(/usr/share/zsh/plugins/zsh-completions/src $fpath)
 compinit -d ~/.zcompdump
 
 zstyle ':completion:*' matcher-list 'm:{a-z}={A-Za-z}' 'r:|[._-]=* r:|=*'
@@ -730,14 +706,14 @@ eval "$(starship init zsh)"
 # PLUGINS
 # =====================================
 
-source ~/.zsh/zsh-autosuggestions/zsh-autosuggestions.zsh
-source ~/.zsh/zsh-history-substring-search/zsh-history-substring-search.zsh
+source /usr/share/zsh/plugins/zsh-autosuggestions/zsh-autosuggestions.zsh
+source /usr/share/zsh/plugins/zsh-history-substring-search/zsh-history-substring-search.zsh
 bindkey '^[[A' history-substring-search-up
 bindkey '^[[B' history-substring-search-down
 source /usr/share/fzf/key-bindings.zsh
 source /usr/share/fzf/completion.zsh
-source ~/.zsh/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
-source ~/.zsh/z/z.sh
+source /usr/share/zsh/plugins/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
+eval "$(zoxide init zsh)"
 
 # =====================================
 # KEYBINDINGS
@@ -770,29 +746,60 @@ bindkey '^[[1;5D' backward-word
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_secs();
-            let _ = std::fs::copy(&zshrc_path, format!("{}.backup_{}", zshrc_path, timestamp));
+            if let Err(e) =
+                std::fs::copy(&zshrc_path, format!("{}.backup_{}", zshrc_path, timestamp))
+            {
+                print_err(&format!("Fallo al respaldar .zshrc: {}", e));
+                return false;
+            }
         }
-        let _ = std::fs::write(&zshrc_path, zshrc);
+        if let Err(e) = std::fs::write(&zshrc_path, zshrc) {
+            print_err(&format!("Fallo al escribir .zshrc: {}", e));
+            return false;
+        }
         print_ok(".zshrc escrito correctamente.");
     }
 
     if confirm_action("¿Deseas aplicar el preset 'jetpack' de Starship?") {
         print_info("Estableciendo preset de Starship...");
-        run_shell("mkdir -p ~/.config && starship preset jetpack -o ~/.config/starship.toml");
+        let _ = run_shell("mkdir -p ~/.config");
+        let starship_cfg = format!("{}/.config/starship.toml", home);
+        if Path::new(&starship_cfg).exists() {
+            let timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+            if let Err(e) = std::fs::copy(
+                &starship_cfg,
+                format!("{}.backup_{}", starship_cfg, timestamp),
+            ) {
+                print_err(&format!("Fallo al respaldar starship.toml: {}", e));
+                return false;
+            }
+        }
+        if !run_shell("starship preset jetpack -o ~/.config/starship.toml") {
+            print_err("Fallo al escribir el preset de Starship.");
+            return false;
+        }
     }
 
-    configurar_fastfetch();
+    if !configurar_fastfetch() {
+        print_err("Fallo la configuración de fastfetch.");
+        return false;
+    }
 
-    if confirm_action("¿Deseas cambiar tu shell predeterminada a ZSH?") {
-        run_shell("sudo chsh -s /bin/zsh $USER");
+    if confirm_action("¿Deseas cambiar tu shell predeterminada a ZSH?") && !run_shell("sudo chsh -s /bin/zsh $USER") {
+        print_err("Fallo al cambiar la shell.");
+        return false;
     }
 
     print_ok("¡Instalación de Terminal Finalizada! — by GekkoApp");
     print_warn("Reinicia sesión o ejecuta: exec zsh  para aplicar cambios.");
     thread::sleep(Duration::from_secs(2));
+    true
 }
 
-fn install_hyprland() {
+fn install_hyprland() -> bool {
     print_header("INSTALANDO PRESET HYPRLAND");
     if !instalar_paquetes(&[
         "gedit",
@@ -817,15 +824,20 @@ fn install_hyprland() {
         "ddcutil",
         "i2c-dev",
     ]) {
-        return;
+        return false;
     }
 
-    desinstalar_paquetes(&["dolphin", "polkit-kde-agent", "wofi"]);
+    if !desinstalar_paquetes(&["dolphin", "polkit-kde-agent", "wofi"]) {
+        print_warn(
+            "Hubo un problema al desinstalar algunos paquetes. Continuando de todos modos...",
+        );
+    }
     print_ok("Evaluación de dependencias de Hyprland finalizada.");
     thread::sleep(Duration::from_secs(2));
+    true
 }
 
-fn install_niri() {
+fn install_niri() -> bool {
     print_header("INSTALANDO PRESET NIRI");
     if !instalar_paquetes(&[
         "gedit",
@@ -855,24 +867,29 @@ fn install_niri() {
         "gpsd",
         "dconf-editor",
     ]) {
-        return;
+        return false;
     }
 
-    desinstalar_paquetes(&["mako", "swaybg", "swayidle", "swaylock", "waybar"]);
+    if !desinstalar_paquetes(&["mako", "swaybg", "swayidle", "swaylock", "waybar"]) {
+        print_warn(
+            "Hubo un problema al desinstalar algunos paquetes. Continuando de todos modos...",
+        );
+    }
     print_ok("Evaluación de dependencias de Niri finalizada.");
     thread::sleep(Duration::from_secs(2));
+    true
 }
 
-fn install_chaotic_aur() {
+fn install_chaotic_aur() -> bool {
     print_header("AGREGANDO REPOSITORIOS CHAOTIC AUR");
 
     if !check_arch_linux() {
         print_err("El sistema no es Arch Linux. No se pueden configurar los repositorios.");
-        return;
+        return false;
     }
 
     if !confirm_action("¿Deseas instalar y configurar Chaotic AUR?") {
-        return;
+        return false;
     }
 
     let keyring_installed = run_shell("pacman -Qq chaotic-keyring >/dev/null 2>&1");
@@ -882,26 +899,26 @@ fn install_chaotic_aur() {
     if keyring_installed && mirrorlist_installed && repo_configured {
         print_ok("Chaotic AUR ya está completamente configurado.");
         thread::sleep(Duration::from_secs(2));
-        return;
-    }
-
-    print_info("Obteniendo y verificando llaves públicas...");
-    let key_success = run_shell("sudo pacman-key --recv-key 3056513887B78AEB --keyserver hkps://keys.openpgp.org || sudo pacman-key --recv-key 3056513887B78AEB --keyserver keyserver.ubuntu.com");
-    if !key_success {
-        print_err("Error crítico: No se pudo obtener la llave GPG de Chaotic AUR.");
-        return;
-    }
-
-    if !run_shell("sudo pacman-key --lsign-key 3056513887B78AEB") {
-        print_err("Error al firmar la llave GPG.");
-        return;
+        return true;
     }
 
     if !keyring_installed || !mirrorlist_installed {
+        print_info("Obteniendo y verificando llaves públicas...");
+        let key_success = run_shell("sudo pacman-key --recv-key 3056513887B78AEB --keyserver hkps://keys.openpgp.org || sudo pacman-key --recv-key 3056513887B78AEB --keyserver keyserver.ubuntu.com");
+        if !key_success {
+            print_err("Error crítico: No se pudo obtener la llave GPG de Chaotic AUR.");
+            return false;
+        }
+
+        if !run_shell("sudo pacman-key --lsign-key 3056513887B78AEB") {
+            print_err("Error al firmar la llave GPG.");
+            return false;
+        }
+
         print_info("Instalando keyring y mirrorlist de Chaotic AUR...");
         if !run_shell("sudo pacman -U --noconfirm 'https://cdn-mirror.chaotic.cx/chaotic-aur/chaotic-keyring.pkg.tar.zst' 'https://cdn-mirror.chaotic.cx/chaotic-aur/chaotic-mirrorlist.pkg.tar.zst'") {
             print_err("Error instalando paquetes de Chaotic AUR.");
-            return;
+            return false;
         }
     }
 
@@ -917,30 +934,49 @@ fn install_chaotic_aur() {
         );
         if !run_shell(&backup_cmd) {
             print_err("No se pudo respaldar pacman.conf.");
-            return;
+            return false;
         }
 
         let append_cmd = r#"echo -e '\n[chaotic-aur]\nSigLevel = Required DatabaseOptional\nInclude = /etc/pacman.d/chaotic-mirrorlist' | sudo tee -a /etc/pacman.conf > /dev/null"#;
         if !run_shell(append_cmd) {
             print_err("Error al escribir en /etc/pacman.conf.");
-            return;
+            let restore_cmd = format!(
+                "sudo cp /etc/pacman.conf.backup_{} /etc/pacman.conf",
+                timestamp
+            );
+            run_shell(&restore_cmd);
+            return false;
         }
-    }
 
-    print_info("Sincronizando repositorios y actualizando el sistema...");
-    if !run_shell("sudo pacman -Syu") {
-        print_err("Error sincronizando repositorios (pacman -Syu falló).");
-        return;
+        print_info("Sincronizando repositorios y actualizando el sistema...");
+        if !run_shell("sudo pacman -Syu") {
+            print_err(
+                "Error sincronizando repositorios (pacman -Syu falló). Restaurando backup...",
+            );
+            let restore_cmd = format!(
+                "sudo cp /etc/pacman.conf.backup_{} /etc/pacman.conf",
+                timestamp
+            );
+            run_shell(&restore_cmd);
+            return false;
+        }
+    } else {
+        print_info("Sincronizando repositorios y actualizando el sistema...");
+        if !run_shell("sudo pacman -Syu") {
+            print_err("Error sincronizando repositorios (pacman -Syu falló).");
+            return false;
+        }
     }
 
     print_ok("¡Repositorios Chaotic AUR configurados con éxito!");
     thread::sleep(Duration::from_secs(2));
+    true
 }
 
-fn install_bauh() {
+fn install_bauh() -> bool {
     print_header("INSTALANDO TIENDA BAUH (AUR)");
     if !instalar_paquetes(&["bauh"]) {
-        return;
+        return false;
     }
 
     print_info("Buscando archivo gems.py de bauh...");
@@ -952,16 +988,17 @@ fn install_bauh() {
     if !ok || gems_path.is_empty() {
         print_warn("No se encontró el archivo gems.py de bauh. Omitiendo modificaciones.");
         thread::sleep(Duration::from_secs(2));
-        return;
+        return true;
     }
 
     print_info("No se parcheará gems.py directamente para evitar romper paquetes de pacman.");
     print_info("Bauh ha sido instalado exitosamente.");
 
     thread::sleep(Duration::from_secs(2));
+    true
 }
 
-fn install_gaming(gpu: &str, vulkan_choice: &str) {
+fn install_gaming(gpu: &str, vulkan_choice: &str) -> bool {
     let label = match gpu {
         "nvidia" => "INSTALANDO UTILIDADES GAMING  ·  NVIDIA",
         "intel" => "INSTALANDO UTILIDADES GAMING  ·  INTEL",
@@ -972,19 +1009,19 @@ fn install_gaming(gpu: &str, vulkan_choice: &str) {
 
     if !check_arch_linux() {
         print_err("El sistema no es Arch Linux. Cancelando.");
-        return;
+        return false;
     }
 
     if !confirm_action(&format!(
         "¿Deseas proceder con la instalación del entorno Gaming para {}?",
         gpu.to_uppercase()
     )) {
-        return;
+        return false;
     }
 
     if !run_shell("sudo pacman -Sy --noconfirm 2>/dev/null") {
         print_err("Fallo al actualizar bases de datos de pacman.");
-        return;
+        return false;
     }
 
     // Steam: pipe the vulkan driver selection answer
@@ -995,6 +1032,7 @@ fn install_gaming(gpu: &str, vulkan_choice: &str) {
     );
     if !run_shell(&steam_cmd) {
         print_warn("Steam no se pudo instalar correctamente o fue cancelado.");
+        return false;
     }
 
     print_info("Instalando dxvk (seleccionando proveedor 1 automáticamente)...");
@@ -1036,6 +1074,7 @@ fn install_gaming(gpu: &str, vulkan_choice: &str) {
 
     print_ok("¡Proceso de instalación Gaming terminado!");
     thread::sleep(Duration::from_secs(2));
+    true
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1115,7 +1154,11 @@ fn main() {
                     continue;
                 }
 
-                install_zsh_starship();
+                if !install_zsh_starship() {
+                    print_err("La instalación de ZSH falló. Abortando 'Instalar TODO'.");
+                    press_enter_to_continue();
+                    continue;
+                }
 
                 println!();
                 println!("¿Qué entorno gráfico deseas instalar?");
@@ -1126,13 +1169,26 @@ fn main() {
                 let _ = io::stdout().flush();
                 let eleccion = read_line();
 
+                let mut ok = true;
                 if eleccion == "1" {
-                    install_hyprland();
+                    ok = install_hyprland();
                 } else if eleccion == "2" {
-                    install_niri();
+                    ok = install_niri();
                 }
 
-                install_bauh();
+                if !ok {
+                    print_err(
+                        "La instalación del entorno gráfico falló. Abortando 'Instalar TODO'.",
+                    );
+                    press_enter_to_continue();
+                    continue;
+                }
+
+                if !install_bauh() {
+                    print_err("La instalación de Bauh falló. Abortando 'Instalar TODO'.");
+                    press_enter_to_continue();
+                    continue;
+                }
 
                 print_ok("¡El sistema global se configuró con éxito!");
                 print_warn("Ejecuta módulos de Gaming por separado según tu GPU.");
