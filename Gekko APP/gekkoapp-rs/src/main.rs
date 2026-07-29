@@ -932,9 +932,46 @@ struct LockGuard<'a> {
 
 impl<'a> Drop for LockGuard<'a> {
     fn drop(&mut self) {
-        let _ = std::process::Command::new("sudo")
+        let st = std::process::Command::new("sudo")
             .args(["rmdir", self.path])
             .status();
+        if let Ok(status) = st {
+            if !status.success() {
+                eprintln!("Atención: No se pudo liberar el candado en {}", self.path);
+            }
+        } else {
+            eprintln!("Atención: Error ejecutando rmdir en {}", self.path);
+        }
+    }
+}
+
+struct BackupGuard {
+    path: String,
+    consumed: bool,
+}
+
+impl BackupGuard {
+    fn new(path: String) -> Self {
+        Self {
+            path,
+            consumed: false,
+        }
+    }
+    fn keep(&mut self) {
+        self.consumed = true;
+    }
+    fn consume(&mut self) {
+        self.consumed = true;
+    }
+}
+
+impl Drop for BackupGuard {
+    fn drop(&mut self) {
+        if !self.consumed {
+            let _ = std::process::Command::new("sudo")
+                .args(["rm", "-f", &self.path])
+                .status();
+        }
     }
 }
 
@@ -1117,6 +1154,7 @@ fn install_chaotic_aur() -> bool {
             print_err("No se pudo generar nombre seguro para el backup.");
             return false;
         };
+        let mut backup_guard = BackupGuard::new(backup_file.clone());
 
         let mut tee = match std::process::Command::new("sudo")
             .arg("tee")
@@ -1173,15 +1211,49 @@ fn install_chaotic_aur() -> bool {
                     match std::fs::read_to_string("/etc/pacman.conf") {
                         Ok(active) => {
                             if active == new_conf {
-                                let restore_cmd =
-                                    format!("sudo mv {} /etc/pacman.conf", backup_file);
-                                if !run_shell(&restore_cmd) {
-                                    print_err("ERROR CRÍTICO: No se pudo restaurar pacman.conf.");
+                                let backup_ok = match std::fs::read_to_string(&backup_guard.path) {
+                                    Ok(b) => b == current_conf,
+                                    Err(_) => false,
+                                };
+                                if !backup_ok {
+                                    print_err("ERROR CRÍTICO: El backup no coincide con la configuración original o no se pudo leer. Se aborta la restauración.");
+                                    backup_guard.keep();
+                                    print_err(&format!(
+                                        "El respaldo manual se encuentra en: {}",
+                                        backup_guard.path
+                                    ));
+                                } else {
+                                    let mut perms_ok = true;
+                                    if !run_shell(&format!("sudo chmod 644 {}", backup_guard.path))
+                                    {
+                                        perms_ok = false;
+                                    }
+                                    if !run_shell(&format!(
+                                        "sudo chown root:root {}",
+                                        backup_guard.path
+                                    )) {
+                                        perms_ok = false;
+                                    }
+                                    if perms_ok {
+                                        let restore_cmd = format!(
+                                            "sudo mv {} /etc/pacman.conf",
+                                            backup_guard.path
+                                        );
+                                        if !run_shell(&restore_cmd) {
+                                            print_err(
+                                                "ERROR CRÍTICO: No se pudo restaurar pacman.conf.",
+                                            );
+                                            backup_guard.keep();
+                                        } else {
+                                            backup_guard.consume();
+                                        }
+                                    } else {
+                                        print_err("ERROR CRÍTICO: No se pudieron establecer permisos en el backup.");
+                                        backup_guard.keep();
+                                    }
                                 }
                             } else {
-                                print_warn(
-                                    "pacman.conf modificado tras nuestra escritura. Backup descartado.",
-                                );
+                                print_warn("pacman.conf modificado tras nuestra escritura. Backup descartado.");
                             }
                         }
                         Err(e) => {
@@ -1189,14 +1261,16 @@ fn install_chaotic_aur() -> bool {
                                 "Error crítico leyendo pacman.conf en rollback: {}",
                                 e
                             ));
+                            backup_guard.keep();
                             print_err(&format!(
                                 "El respaldo manual está disponible en: {}",
-                                backup_file
+                                backup_guard.path
                             ));
                         }
                     }
                     return false;
                 }
+                backup_guard.consume();
             }
         }
     } else {
