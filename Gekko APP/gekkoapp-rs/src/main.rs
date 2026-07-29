@@ -894,6 +894,8 @@ fn check_chaotic_aur_configured(pacman_conf: &str) -> bool {
         if trimmed.starts_with('[') && trimmed.ends_with(']') {
             if trimmed == "[chaotic-aur]" {
                 in_chaotic = true;
+                has_siglevel = false;
+                has_include = false;
             } else if in_chaotic {
                 if has_siglevel && has_include {
                     return true;
@@ -903,16 +905,83 @@ fn check_chaotic_aur_configured(pacman_conf: &str) -> bool {
                 has_include = false;
             }
         } else if in_chaotic {
-            let clean_line = trimmed.replace(" ", "");
-            if clean_line.contains("SigLevel=RequiredDatabaseOptional") {
-                has_siglevel = true;
-            } else if clean_line.contains("Include=/etc/pacman.d/chaotic-mirrorlist") {
-                has_include = true;
+            if let Some((key, val)) = trimmed.split_once('=') {
+                let key = key.trim();
+                let val = val.trim();
+                if key == "SigLevel" && val == "Required DatabaseOptional" {
+                    has_siglevel = true;
+                } else if key == "Include" && val == "/etc/pacman.d/chaotic-mirrorlist" {
+                    has_include = true;
+                }
             }
         }
     }
 
     in_chaotic && has_siglevel && has_include
+}
+
+fn replace_pacman_conf_securely(new_conf: &str) -> bool {
+    let mktemp_cmd = std::process::Command::new("sudo")
+        .arg("mktemp")
+        .arg("/etc/pacman.conf.tmp.XXXXXX")
+        .output();
+
+    let tmp_file = match mktemp_cmd {
+        Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).trim().to_string(),
+        _ => return false,
+    };
+
+    let mut tee = std::process::Command::new("sudo")
+        .arg("tee")
+        .arg(&tmp_file)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .spawn()
+        .expect("Failed to spawn sudo tee");
+
+    if let Some(mut stdin) = tee.stdin.take() {
+        if std::io::Write::write_all(&mut stdin, new_conf.as_bytes()).is_err() {
+            let _ = tee.wait();
+            let _ = std::process::Command::new("sudo")
+                .arg("rm")
+                .arg("-f")
+                .arg(&tmp_file)
+                .status();
+            return false;
+        }
+    }
+
+    let status = tee.wait().expect("Failed to wait on sudo tee");
+    if !status.success() {
+        let _ = std::process::Command::new("sudo")
+            .arg("rm")
+            .arg("-f")
+            .arg(&tmp_file)
+            .status();
+        return false;
+    }
+
+    let _ = std::process::Command::new("sudo")
+        .args(["chmod", "644", &tmp_file])
+        .status();
+    let _ = std::process::Command::new("sudo")
+        .args(["chown", "root:root", &tmp_file])
+        .status();
+
+    let mv_status = std::process::Command::new("sudo")
+        .args(["mv", &tmp_file, "/etc/pacman.conf"])
+        .status();
+
+    if let Ok(st) = mv_status {
+        st.success()
+    } else {
+        let _ = std::process::Command::new("sudo")
+            .arg("rm")
+            .arg("-f")
+            .arg(&tmp_file)
+            .status();
+        false
+    }
 }
 
 fn install_chaotic_aur() -> bool {
@@ -937,7 +1006,7 @@ fn install_chaotic_aur() -> bool {
             return false;
         }
     };
-    
+
     let repo_configured = check_chaotic_aur_configured(&pacman_conf);
 
     if keyring_installed && mirrorlist_installed && repo_configured {
@@ -966,17 +1035,23 @@ fn install_chaotic_aur() -> bool {
         }
     }
 
-    if !repo_configured {
+    let current_conf = match std::fs::read_to_string("/etc/pacman.conf") {
+        Ok(conf) => conf,
+        Err(_) => {
+            print_err("Error crítico: No se pudo releer /etc/pacman.conf");
+            return false;
+        }
+    };
+
+    if !check_chaotic_aur_configured(&current_conf) {
         print_info("Editando /etc/pacman.conf de manera segura...");
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs();
 
-        let backup_cmd = format!(
-            "sudo cp /etc/pacman.conf /etc/pacman.conf.backup_{}",
-            timestamp
-        );
+        let backup_file = format!("/etc/pacman.conf.backup_{}", timestamp);
+        let backup_cmd = format!("sudo cp /etc/pacman.conf {}", backup_file);
         if !run_shell(&backup_cmd) {
             print_err("No se pudo respaldar pacman.conf.");
             return false;
@@ -984,7 +1059,7 @@ fn install_chaotic_aur() -> bool {
 
         let mut new_conf = String::new();
         let mut in_chaotic = false;
-        for line in pacman_conf.lines() {
+        for line in current_conf.lines() {
             let trimmed = line.trim();
             if trimmed.starts_with("[chaotic-aur]") {
                 in_chaotic = true;
@@ -1000,32 +1075,21 @@ fn install_chaotic_aur() -> bool {
         }
         new_conf.push_str("\n[chaotic-aur]\nSigLevel = Required DatabaseOptional\nInclude = /etc/pacman.d/chaotic-mirrorlist\n");
 
-        if std::fs::write("/tmp/pacman.conf.new", new_conf).is_err() {
-            print_err("Fallo al escribir en el archivo temporal /tmp/pacman.conf.new");
-            return false;
-        }
-
-        let atomic_replace_cmd = "sudo cp /tmp/pacman.conf.new /etc/pacman.conf.tmp && sudo mv /etc/pacman.conf.tmp /etc/pacman.conf";
-        if !run_shell(atomic_replace_cmd) {
-            print_err("Fallo al reemplazar pacman.conf de manera atómica. Ejecutando rollback...");
-            let restore_cmd = format!("sudo cp /etc/pacman.conf.backup_{} /etc/pacman.conf", timestamp);
+        if !replace_pacman_conf_securely(&new_conf) {
+            print_err("Fallo al reemplazar pacman.conf de manera atómica. Restaurando...");
+            let restore_cmd = format!("sudo mv {} /etc/pacman.conf", backup_file);
             if !run_shell(&restore_cmd) {
-                print_err("ERROR CRÍTICO: No se pudo restaurar pacman.conf desde el respaldo.");
+                print_err("ERROR CRÍTICO: No se pudo restaurar pacman.conf.");
             }
             return false;
         }
 
         print_info("Sincronizando repositorios y actualizando el sistema...");
         if !run_shell("sudo pacman -Syu") {
-            print_err(
-                "Error sincronizando repositorios (pacman -Syu falló). Restaurando backup...",
-            );
-            let restore_cmd = format!(
-                "sudo cp /etc/pacman.conf.backup_{} /etc/pacman.conf",
-                timestamp
-            );
+            print_err("Error sincronizando repositorios. Restaurando backup...");
+            let restore_cmd = format!("sudo mv {} /etc/pacman.conf", backup_file);
             if !run_shell(&restore_cmd) {
-                print_err("ERROR CRÍTICO: No se pudo restaurar pacman.conf desde el respaldo.");
+                print_err("ERROR CRÍTICO: No se pudo restaurar pacman.conf.");
             }
             return false;
         }
@@ -1294,5 +1358,65 @@ fn main() {
                 thread::sleep(Duration::from_secs(2));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_check_chaotic_aur_configured() {
+        let valid = "
+[options]
+Architecture = auto
+
+[chaotic-aur]
+SigLevel = Required DatabaseOptional
+Include = /etc/pacman.d/chaotic-mirrorlist
+        ";
+        assert!(check_chaotic_aur_configured(valid));
+
+        let incomplete = "
+[chaotic-aur]
+SigLevel = Required DatabaseOptional
+        ";
+        assert!(!check_chaotic_aur_configured(incomplete));
+
+        let wrong_keys = "
+[chaotic-aur]
+NotSigLevel = Required DatabaseOptional
+BadInclude = /etc/pacman.d/chaotic-mirrorlist
+        ";
+        assert!(!check_chaotic_aur_configured(wrong_keys));
+
+        let multiple_blocks_no_merge = "
+[chaotic-aur]
+SigLevel = Required DatabaseOptional
+
+[chaotic-aur]
+Include = /etc/pacman.d/chaotic-mirrorlist
+        ";
+        assert!(!check_chaotic_aur_configured(multiple_blocks_no_merge));
+
+        let commented = "
+#[chaotic-aur]
+#SigLevel = Required DatabaseOptional
+#Include = /etc/pacman.d/chaotic-mirrorlist
+        ";
+        assert!(!check_chaotic_aur_configured(commented));
+
+        let mixed_repos = "
+[core]
+Include = /etc/pacman.d/mirrorlist
+
+[chaotic-aur]
+SigLevel = Required DatabaseOptional
+Include = /etc/pacman.d/chaotic-mirrorlist
+
+[extra]
+Include = /etc/pacman.d/mirrorlist
+        ";
+        assert!(check_chaotic_aur_configured(mixed_repos));
     }
 }
