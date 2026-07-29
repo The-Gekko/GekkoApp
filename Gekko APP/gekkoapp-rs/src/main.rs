@@ -926,6 +926,18 @@ enum ReplaceResult {
     Replaced,
 }
 
+struct LockGuard<'a> {
+    path: &'a str,
+}
+
+impl<'a> Drop for LockGuard<'a> {
+    fn drop(&mut self) {
+        let _ = std::process::Command::new("sudo")
+            .args(["rmdir", self.path])
+            .status();
+    }
+}
+
 fn replace_pacman_conf_securely(current_conf: &str, new_conf: &str) -> ReplaceResult {
     let mktemp_cmd = std::process::Command::new("sudo")
         .arg("mktemp")
@@ -1042,6 +1054,13 @@ fn install_chaotic_aur() -> bool {
         return false;
     }
 
+    let lock_path = "/run/lock/gekkoapp_pacman_conf_lock";
+    if !run_shell(&format!("sudo mkdir {}", lock_path)) {
+        print_err("No se pudo obtener el bloqueo de transacción. ¿Otra instancia en ejecución?");
+        return false;
+    }
+    let _lock = LockGuard { path: lock_path };
+
     let keyring_installed = run_shell("pacman -Qq chaotic-keyring >/dev/null 2>&1");
     let mirrorlist_installed = run_shell("pacman -Qq chaotic-mirrorlist >/dev/null 2>&1");
 
@@ -1098,8 +1117,24 @@ fn install_chaotic_aur() -> bool {
             print_err("No se pudo generar nombre seguro para el backup.");
             return false;
         };
-        let backup_cmd = format!("sudo cp /etc/pacman.conf {}", backup_file);
-        if !run_shell(&backup_cmd) {
+
+        let mut tee = match std::process::Command::new("sudo")
+            .arg("tee")
+            .arg(&backup_file)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .spawn()
+        {
+            Ok(child) => child,
+            Err(_) => return false,
+        };
+        if let Some(mut stdin) = tee.stdin.take() {
+            if std::io::Write::write_all(&mut stdin, current_conf.as_bytes()).is_err() {
+                let _ = tee.wait();
+                return false;
+            }
+        }
+        if !tee.wait().map(|s| s.success()).unwrap_or(false) {
             print_err("No se pudo respaldar pacman.conf.");
             return false;
         }
@@ -1135,16 +1170,29 @@ fn install_chaotic_aur() -> bool {
                 print_info("Sincronizando repositorios y actualizando el sistema...");
                 if !run_shell("sudo pacman -Syu") {
                     print_err("Error sincronizando repositorios. Restaurando backup...");
-                    if let Ok(active) = std::fs::read_to_string("/etc/pacman.conf") {
-                        if active == new_conf {
-                            let restore_cmd = format!("sudo mv {} /etc/pacman.conf", backup_file);
-                            if !run_shell(&restore_cmd) {
-                                print_err("ERROR CRÍTICO: No se pudo restaurar pacman.conf.");
+                    match std::fs::read_to_string("/etc/pacman.conf") {
+                        Ok(active) => {
+                            if active == new_conf {
+                                let restore_cmd =
+                                    format!("sudo mv {} /etc/pacman.conf", backup_file);
+                                if !run_shell(&restore_cmd) {
+                                    print_err("ERROR CRÍTICO: No se pudo restaurar pacman.conf.");
+                                }
+                            } else {
+                                print_warn(
+                                    "pacman.conf modificado tras nuestra escritura. Backup descartado.",
+                                );
                             }
-                        } else {
-                            print_warn(
-                                "pacman.conf modificado tras nuestra escritura. Backup descartado.",
-                            );
+                        }
+                        Err(e) => {
+                            print_err(&format!(
+                                "Error crítico leyendo pacman.conf en rollback: {}",
+                                e
+                            ));
+                            print_err(&format!(
+                                "El respaldo manual está disponible en: {}",
+                                backup_file
+                            ));
                         }
                     }
                     return false;
