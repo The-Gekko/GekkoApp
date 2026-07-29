@@ -931,55 +931,83 @@ fn replace_pacman_conf_securely(new_conf: &str) -> bool {
         _ => return false,
     };
 
-    let mut tee = std::process::Command::new("sudo")
+    let cleanup = |file: &str| {
+        let _ = std::process::Command::new("sudo")
+            .arg("rm")
+            .arg("-f")
+            .arg(file)
+            .status();
+    };
+
+    let mut tee = match std::process::Command::new("sudo")
         .arg("tee")
         .arg(&tmp_file)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::null())
         .spawn()
-        .expect("Failed to spawn sudo tee");
+    {
+        Ok(child) => child,
+        Err(_) => {
+            cleanup(&tmp_file);
+            return false;
+        }
+    };
 
     if let Some(mut stdin) = tee.stdin.take() {
         if std::io::Write::write_all(&mut stdin, new_conf.as_bytes()).is_err() {
             let _ = tee.wait();
-            let _ = std::process::Command::new("sudo")
-                .arg("rm")
-                .arg("-f")
-                .arg(&tmp_file)
-                .status();
+            cleanup(&tmp_file);
             return false;
         }
     }
 
-    let status = tee.wait().expect("Failed to wait on sudo tee");
-    if !status.success() {
-        let _ = std::process::Command::new("sudo")
-            .arg("rm")
-            .arg("-f")
-            .arg(&tmp_file)
-            .status();
-        return false;
+    match tee.wait() {
+        Ok(status) if status.success() => {}
+        _ => {
+            cleanup(&tmp_file);
+            return false;
+        }
     }
 
-    let _ = std::process::Command::new("sudo")
+    match std::process::Command::new("sudo")
         .args(["chmod", "644", &tmp_file])
-        .status();
-    let _ = std::process::Command::new("sudo")
+        .status()
+    {
+        Ok(status) if status.success() => {}
+        _ => {
+            cleanup(&tmp_file);
+            return false;
+        }
+    }
+    match std::process::Command::new("sudo")
         .args(["chown", "root:root", &tmp_file])
-        .status();
+        .status()
+    {
+        Ok(status) if status.success() => {}
+        _ => {
+            cleanup(&tmp_file);
+            return false;
+        }
+    }
+
+    if !check_chaotic_aur_configured(new_conf) {
+        cleanup(&tmp_file);
+        return false;
+    }
 
     let mv_status = std::process::Command::new("sudo")
         .args(["mv", &tmp_file, "/etc/pacman.conf"])
         .status();
 
     if let Ok(st) = mv_status {
-        st.success()
+        if st.success() {
+            true
+        } else {
+            cleanup(&tmp_file);
+            false
+        }
     } else {
-        let _ = std::process::Command::new("sudo")
-            .arg("rm")
-            .arg("-f")
-            .arg(&tmp_file)
-            .status();
+        cleanup(&tmp_file);
         false
     }
 }
@@ -1054,6 +1082,15 @@ fn install_chaotic_aur() -> bool {
         let backup_cmd = format!("sudo cp /etc/pacman.conf {}", backup_file);
         if !run_shell(&backup_cmd) {
             print_err("No se pudo respaldar pacman.conf.");
+            return false;
+        }
+
+        let verify_conf = match std::fs::read_to_string("/etc/pacman.conf") {
+            Ok(c) => c,
+            Err(_) => return false,
+        };
+        if current_conf != verify_conf {
+            print_err("Archivo pacman.conf modificado por otro proceso. Abortando.");
             return false;
         }
 
