@@ -788,7 +788,9 @@ bindkey '^[[1;5D' backward-word
         return false;
     }
 
-    if confirm_action("¿Deseas cambiar tu shell predeterminada a ZSH?") && !run_shell("sudo chsh -s /bin/zsh $USER") {
+    if confirm_action("¿Deseas cambiar tu shell predeterminada a ZSH?")
+        && !run_shell("sudo chsh -s /bin/zsh $USER")
+    {
         print_err("Fallo al cambiar la shell.");
         return false;
     }
@@ -828,9 +830,8 @@ fn install_hyprland() -> bool {
     }
 
     if !desinstalar_paquetes(&["dolphin", "polkit-kde-agent", "wofi"]) {
-        print_warn(
-            "Hubo un problema al desinstalar algunos paquetes. Continuando de todos modos...",
-        );
+        print_warn("Hubo un problema o se canceló la desinstalación. Abortando instalación.");
+        return false;
     }
     print_ok("Evaluación de dependencias de Hyprland finalizada.");
     thread::sleep(Duration::from_secs(2));
@@ -871,9 +872,8 @@ fn install_niri() -> bool {
     }
 
     if !desinstalar_paquetes(&["mako", "swaybg", "swayidle", "swaylock", "waybar"]) {
-        print_warn(
-            "Hubo un problema al desinstalar algunos paquetes. Continuando de todos modos...",
-        );
+        print_warn("Hubo un problema o se canceló la desinstalación. Abortando instalación.");
+        return false;
     }
     print_ok("Evaluación de dependencias de Niri finalizada.");
     thread::sleep(Duration::from_secs(2));
@@ -894,7 +894,11 @@ fn install_chaotic_aur() -> bool {
 
     let keyring_installed = run_shell("pacman -Qq chaotic-keyring >/dev/null 2>&1");
     let mirrorlist_installed = run_shell("pacman -Qq chaotic-mirrorlist >/dev/null 2>&1");
-    let repo_configured = run_shell("grep -q '^\\[chaotic-aur\\]' /etc/pacman.conf");
+
+    let pacman_conf = std::fs::read_to_string("/etc/pacman.conf").unwrap_or_default();
+    let repo_configured = pacman_conf.contains("[chaotic-aur]")
+        && pacman_conf.contains("SigLevel = Required DatabaseOptional")
+        && pacman_conf.contains("Include = /etc/pacman.d/chaotic-mirrorlist");
 
     if keyring_installed && mirrorlist_installed && repo_configured {
         print_ok("Chaotic AUR ya está completamente configurado.");
@@ -928,6 +932,7 @@ fn install_chaotic_aur() -> bool {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs();
+
         let backup_cmd = format!(
             "sudo cp /etc/pacman.conf /etc/pacman.conf.backup_{}",
             timestamp
@@ -937,14 +942,30 @@ fn install_chaotic_aur() -> bool {
             return false;
         }
 
-        let append_cmd = r#"echo -e '\n[chaotic-aur]\nSigLevel = Required DatabaseOptional\nInclude = /etc/pacman.d/chaotic-mirrorlist' | sudo tee -a /etc/pacman.conf > /dev/null"#;
-        if !run_shell(append_cmd) {
-            print_err("Error al escribir en /etc/pacman.conf.");
-            let restore_cmd = format!(
-                "sudo cp /etc/pacman.conf.backup_{} /etc/pacman.conf",
-                timestamp
-            );
-            run_shell(&restore_cmd);
+        let mut new_conf = String::new();
+        let mut in_chaotic = false;
+        for line in pacman_conf.lines() {
+            if line.trim().starts_with("[chaotic-aur]") {
+                in_chaotic = true;
+                continue;
+            }
+            if in_chaotic && line.trim().starts_with('[') {
+                in_chaotic = false;
+            }
+            if !in_chaotic {
+                new_conf.push_str(line);
+                new_conf.push('\n');
+            }
+        }
+        new_conf.push_str("\n[chaotic-aur]\nSigLevel = Required DatabaseOptional\nInclude = /etc/pacman.d/chaotic-mirrorlist\n");
+
+        if std::fs::write("/tmp/pacman.conf.new", new_conf).is_err() {
+            print_err("Fallo al escribir en el archivo temporal /tmp/pacman.conf.new");
+            return false;
+        }
+
+        if !run_shell("sudo cp /tmp/pacman.conf.new /etc/pacman.conf") {
+            print_err("Fallo al reemplazar pacman.conf. Se aborta la operación.");
             return false;
         }
 
@@ -957,7 +978,9 @@ fn install_chaotic_aur() -> bool {
                 "sudo cp /etc/pacman.conf.backup_{} /etc/pacman.conf",
                 timestamp
             );
-            run_shell(&restore_cmd);
+            if !run_shell(&restore_cmd) {
+                print_err("ERROR CRÍTICO: No se pudo restaurar pacman.conf desde el respaldo.");
+            }
             return false;
         }
     } else {
@@ -1019,10 +1042,7 @@ fn install_gaming(gpu: &str, vulkan_choice: &str) -> bool {
         return false;
     }
 
-    if !run_shell("sudo pacman -Sy --noconfirm 2>/dev/null") {
-        print_err("Fallo al actualizar bases de datos de pacman.");
-        return false;
-    }
+    // Eliminado pacman -Sy aislado según reglas de Arch Linux sobre actualizaciones parciales.
 
     // Steam: pipe the vulkan driver selection answer
     print_info("Instalando steam...");
@@ -1039,6 +1059,7 @@ fn install_gaming(gpu: &str, vulkan_choice: &str) -> bool {
     if !is_package_installed("dxvk-async-git") && !is_package_installed("dxvk-mingw-git") {
         if !run_shell("echo '1' | sudo pacman -S --needed dxvk 2>&1") {
             print_warn("Fallo al instalar dxvk.");
+            return false;
         }
     } else {
         print_ok("dxvk ya está instalado. Saltando...");
@@ -1047,6 +1068,7 @@ fn install_gaming(gpu: &str, vulkan_choice: &str) -> bool {
     print_info("Instalando dependencias de Proton GE (lib32-gstreamer)...");
     if !instalar_paquetes(&["lib32-gstreamer", "lib32-gst-plugins-base"]) {
         print_warn("Fallo al instalar dependencias de lib32.");
+        return false;
     }
 
     if !instalar_paquetes(&[
@@ -1058,6 +1080,7 @@ fn install_gaming(gpu: &str, vulkan_choice: &str) -> bool {
         "flatpak",
     ]) {
         print_warn("Fallo al instalar algunas herramientas gaming.");
+        return false;
     }
 
     print_info("Instalando proton-ge-custom-bin...");
@@ -1067,6 +1090,7 @@ fn install_gaming(gpu: &str, vulkan_choice: &str) -> bool {
             print_ok("proton-ge-custom-bin instalado.");
         } else {
             print_warn("proton-ge-custom-bin no pudo instalarse. Instálalo manualmente con: sudo pacman -S proton-ge-custom-bin");
+            return false;
         }
     } else {
         print_ok("proton-ge-custom-bin ya está instalado.");
@@ -1160,25 +1184,35 @@ fn main() {
                     continue;
                 }
 
-                println!();
-                println!("¿Qué entorno gráfico deseas instalar?");
-                println!("1) Hyprland");
-                println!("2) Niri");
-                println!("Cualquier otra tecla para omitir la instalación de entorno gráfico.");
-                print!("Elige (1/2): ");
-                let _ = io::stdout().flush();
-                let eleccion = read_line();
+                let ok;
+                loop {
+                    println!();
+                    println!("¿Qué entorno gráfico deseas instalar?");
+                    println!("1) Hyprland");
+                    println!("2) Niri");
+                    println!("3) Cancelar operación global");
+                    print!("Elige (1/2/3): ");
+                    let _ = io::stdout().flush();
+                    let eleccion = read_line();
 
-                let mut ok = true;
-                if eleccion == "1" {
-                    ok = install_hyprland();
-                } else if eleccion == "2" {
-                    ok = install_niri();
+                    if eleccion == "1" {
+                        ok = install_hyprland();
+                        break;
+                    } else if eleccion == "2" {
+                        ok = install_niri();
+                        break;
+                    } else if eleccion == "3" {
+                        ok = false;
+                        print_warn("Operación cancelada por el usuario.");
+                        break;
+                    } else {
+                        print_warn("Opción no válida. Por favor, elige 1, 2 o 3.");
+                    }
                 }
 
                 if !ok {
                     print_err(
-                        "La instalación del entorno gráfico falló. Abortando 'Instalar TODO'.",
+                        "La instalación del entorno gráfico falló o fue cancelada. Abortando 'Instalar TODO'.",
                     );
                     press_enter_to_continue();
                     continue;
