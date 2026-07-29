@@ -920,7 +920,13 @@ fn check_chaotic_aur_configured(pacman_conf: &str) -> bool {
     in_chaotic && has_siglevel && has_include
 }
 
-fn replace_pacman_conf_securely(new_conf: &str) -> bool {
+enum ReplaceResult {
+    ConcurrentModification,
+    NotReplaced,
+    Replaced,
+}
+
+fn replace_pacman_conf_securely(current_conf: &str, new_conf: &str) -> ReplaceResult {
     let mktemp_cmd = std::process::Command::new("sudo")
         .arg("mktemp")
         .arg("/etc/pacman.conf.tmp.XXXXXX")
@@ -928,7 +934,7 @@ fn replace_pacman_conf_securely(new_conf: &str) -> bool {
 
     let tmp_file = match mktemp_cmd {
         Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).trim().to_string(),
-        _ => return false,
+        _ => return ReplaceResult::NotReplaced,
     };
 
     let cleanup = |file: &str| {
@@ -949,7 +955,7 @@ fn replace_pacman_conf_securely(new_conf: &str) -> bool {
         Ok(child) => child,
         Err(_) => {
             cleanup(&tmp_file);
-            return false;
+            return ReplaceResult::NotReplaced;
         }
     };
 
@@ -957,7 +963,7 @@ fn replace_pacman_conf_securely(new_conf: &str) -> bool {
         if std::io::Write::write_all(&mut stdin, new_conf.as_bytes()).is_err() {
             let _ = tee.wait();
             cleanup(&tmp_file);
-            return false;
+            return ReplaceResult::NotReplaced;
         }
     }
 
@@ -965,7 +971,7 @@ fn replace_pacman_conf_securely(new_conf: &str) -> bool {
         Ok(status) if status.success() => {}
         _ => {
             cleanup(&tmp_file);
-            return false;
+            return ReplaceResult::NotReplaced;
         }
     }
 
@@ -976,7 +982,7 @@ fn replace_pacman_conf_securely(new_conf: &str) -> bool {
         Ok(status) if status.success() => {}
         _ => {
             cleanup(&tmp_file);
-            return false;
+            return ReplaceResult::NotReplaced;
         }
     }
     match std::process::Command::new("sudo")
@@ -986,13 +992,25 @@ fn replace_pacman_conf_securely(new_conf: &str) -> bool {
         Ok(status) if status.success() => {}
         _ => {
             cleanup(&tmp_file);
-            return false;
+            return ReplaceResult::NotReplaced;
         }
     }
 
     if !check_chaotic_aur_configured(new_conf) {
         cleanup(&tmp_file);
-        return false;
+        return ReplaceResult::NotReplaced;
+    }
+
+    let active_conf = match std::fs::read_to_string("/etc/pacman.conf") {
+        Ok(c) => c,
+        Err(_) => {
+            cleanup(&tmp_file);
+            return ReplaceResult::NotReplaced;
+        }
+    };
+    if active_conf != current_conf {
+        cleanup(&tmp_file);
+        return ReplaceResult::ConcurrentModification;
     }
 
     let mv_status = std::process::Command::new("sudo")
@@ -1001,14 +1019,14 @@ fn replace_pacman_conf_securely(new_conf: &str) -> bool {
 
     if let Ok(st) = mv_status {
         if st.success() {
-            true
+            ReplaceResult::Replaced
         } else {
             cleanup(&tmp_file);
-            false
+            ReplaceResult::NotReplaced
         }
     } else {
         cleanup(&tmp_file);
-        false
+        ReplaceResult::NotReplaced
     }
 }
 
@@ -1073,24 +1091,16 @@ fn install_chaotic_aur() -> bool {
 
     if !check_chaotic_aur_configured(&current_conf) {
         print_info("Editando /etc/pacman.conf de manera segura...");
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-
-        let backup_file = format!("/etc/pacman.conf.backup_{}", timestamp);
+        let (ok, out) = run_shell_piped("sudo mktemp /etc/pacman.conf.backup.XXXXXX");
+        let backup_file = if ok {
+            out.trim().to_string()
+        } else {
+            print_err("No se pudo generar nombre seguro para el backup.");
+            return false;
+        };
         let backup_cmd = format!("sudo cp /etc/pacman.conf {}", backup_file);
         if !run_shell(&backup_cmd) {
             print_err("No se pudo respaldar pacman.conf.");
-            return false;
-        }
-
-        let verify_conf = match std::fs::read_to_string("/etc/pacman.conf") {
-            Ok(c) => c,
-            Err(_) => return false,
-        };
-        if current_conf != verify_conf {
-            print_err("Archivo pacman.conf modificado por otro proceso. Abortando.");
             return false;
         }
 
@@ -1112,23 +1122,34 @@ fn install_chaotic_aur() -> bool {
         }
         new_conf.push_str("\n[chaotic-aur]\nSigLevel = Required DatabaseOptional\nInclude = /etc/pacman.d/chaotic-mirrorlist\n");
 
-        if !replace_pacman_conf_securely(&new_conf) {
-            print_err("Fallo al reemplazar pacman.conf de manera atómica. Restaurando...");
-            let restore_cmd = format!("sudo mv {} /etc/pacman.conf", backup_file);
-            if !run_shell(&restore_cmd) {
-                print_err("ERROR CRÍTICO: No se pudo restaurar pacman.conf.");
+        match replace_pacman_conf_securely(&current_conf, &new_conf) {
+            ReplaceResult::ConcurrentModification => {
+                print_err("Archivo pacman.conf modificado por otro proceso. Abortando.");
+                return false;
             }
-            return false;
-        }
-
-        print_info("Sincronizando repositorios y actualizando el sistema...");
-        if !run_shell("sudo pacman -Syu") {
-            print_err("Error sincronizando repositorios. Restaurando backup...");
-            let restore_cmd = format!("sudo mv {} /etc/pacman.conf", backup_file);
-            if !run_shell(&restore_cmd) {
-                print_err("ERROR CRÍTICO: No se pudo restaurar pacman.conf.");
+            ReplaceResult::NotReplaced => {
+                print_err("Fallo al preparar o reemplazar pacman.conf.");
+                return false;
             }
-            return false;
+            ReplaceResult::Replaced => {
+                print_info("Sincronizando repositorios y actualizando el sistema...");
+                if !run_shell("sudo pacman -Syu") {
+                    print_err("Error sincronizando repositorios. Restaurando backup...");
+                    if let Ok(active) = std::fs::read_to_string("/etc/pacman.conf") {
+                        if active == new_conf {
+                            let restore_cmd = format!("sudo mv {} /etc/pacman.conf", backup_file);
+                            if !run_shell(&restore_cmd) {
+                                print_err("ERROR CRÍTICO: No se pudo restaurar pacman.conf.");
+                            }
+                        } else {
+                            print_warn(
+                                "pacman.conf modificado tras nuestra escritura. Backup descartado.",
+                            );
+                        }
+                    }
+                    return false;
+                }
+            }
         }
     } else {
         print_info("Sincronizando repositorios y actualizando el sistema...");
