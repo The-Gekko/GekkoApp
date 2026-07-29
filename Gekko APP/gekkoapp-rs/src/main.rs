@@ -880,6 +880,41 @@ fn install_niri() -> bool {
     true
 }
 
+fn check_chaotic_aur_configured(pacman_conf: &str) -> bool {
+    let mut in_chaotic = false;
+    let mut has_siglevel = false;
+    let mut has_include = false;
+
+    for line in pacman_conf.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('#') || trimmed.is_empty() {
+            continue;
+        }
+
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            if trimmed == "[chaotic-aur]" {
+                in_chaotic = true;
+            } else if in_chaotic {
+                if has_siglevel && has_include {
+                    return true;
+                }
+                in_chaotic = false;
+                has_siglevel = false;
+                has_include = false;
+            }
+        } else if in_chaotic {
+            let clean_line = trimmed.replace(" ", "");
+            if clean_line.contains("SigLevel=RequiredDatabaseOptional") {
+                has_siglevel = true;
+            } else if clean_line.contains("Include=/etc/pacman.d/chaotic-mirrorlist") {
+                has_include = true;
+            }
+        }
+    }
+
+    in_chaotic && has_siglevel && has_include
+}
+
 fn install_chaotic_aur() -> bool {
     print_header("AGREGANDO REPOSITORIOS CHAOTIC AUR");
 
@@ -895,10 +930,15 @@ fn install_chaotic_aur() -> bool {
     let keyring_installed = run_shell("pacman -Qq chaotic-keyring >/dev/null 2>&1");
     let mirrorlist_installed = run_shell("pacman -Qq chaotic-mirrorlist >/dev/null 2>&1");
 
-    let pacman_conf = std::fs::read_to_string("/etc/pacman.conf").unwrap_or_default();
-    let repo_configured = pacman_conf.contains("[chaotic-aur]")
-        && pacman_conf.contains("SigLevel = Required DatabaseOptional")
-        && pacman_conf.contains("Include = /etc/pacman.d/chaotic-mirrorlist");
+    let pacman_conf = match std::fs::read_to_string("/etc/pacman.conf") {
+        Ok(conf) => conf,
+        Err(_) => {
+            print_err("Error crítico: No se pudo leer /etc/pacman.conf");
+            return false;
+        }
+    };
+    
+    let repo_configured = check_chaotic_aur_configured(&pacman_conf);
 
     if keyring_installed && mirrorlist_installed && repo_configured {
         print_ok("Chaotic AUR ya está completamente configurado.");
@@ -945,11 +985,12 @@ fn install_chaotic_aur() -> bool {
         let mut new_conf = String::new();
         let mut in_chaotic = false;
         for line in pacman_conf.lines() {
-            if line.trim().starts_with("[chaotic-aur]") {
+            let trimmed = line.trim();
+            if trimmed.starts_with("[chaotic-aur]") {
                 in_chaotic = true;
                 continue;
             }
-            if in_chaotic && line.trim().starts_with('[') {
+            if in_chaotic && trimmed.starts_with('[') {
                 in_chaotic = false;
             }
             if !in_chaotic {
@@ -964,8 +1005,13 @@ fn install_chaotic_aur() -> bool {
             return false;
         }
 
-        if !run_shell("sudo cp /tmp/pacman.conf.new /etc/pacman.conf") {
-            print_err("Fallo al reemplazar pacman.conf. Se aborta la operación.");
+        let atomic_replace_cmd = "sudo cp /tmp/pacman.conf.new /etc/pacman.conf.tmp && sudo mv /etc/pacman.conf.tmp /etc/pacman.conf";
+        if !run_shell(atomic_replace_cmd) {
+            print_err("Fallo al reemplazar pacman.conf de manera atómica. Ejecutando rollback...");
+            let restore_cmd = format!("sudo cp /etc/pacman.conf.backup_{} /etc/pacman.conf", timestamp);
+            if !run_shell(&restore_cmd) {
+                print_err("ERROR CRÍTICO: No se pudo restaurar pacman.conf desde el respaldo.");
+            }
             return false;
         }
 
@@ -1111,8 +1157,8 @@ fn check_chaotic_aur_startup() {
     if check_arch_linux() {
         print_ok("Sistema operativo detectado: Arch Linux");
 
-        let (_, out) = run_shell_piped("grep -q '^\\[chaotic-aur\\]' /etc/pacman.conf && echo yes");
-        if out.trim() == "yes" {
+        let pacman_conf = std::fs::read_to_string("/etc/pacman.conf").unwrap_or_default();
+        if check_chaotic_aur_configured(&pacman_conf) {
             print_ok("Repositorio Chaotic AUR: CONFIGURADO");
         } else {
             print_warn("Repositorio Chaotic AUR: NO CONFIGURADO");
@@ -1178,13 +1224,7 @@ fn main() {
                     continue;
                 }
 
-                if !install_zsh_starship() {
-                    print_err("La instalación de ZSH falló. Abortando 'Instalar TODO'.");
-                    press_enter_to_continue();
-                    continue;
-                }
-
-                let ok;
+                let eleccion_global;
                 loop {
                     println!();
                     println!("¿Qué entorno gráfico deseas instalar?");
@@ -1195,20 +1235,34 @@ fn main() {
                     let _ = io::stdout().flush();
                     let eleccion = read_line();
 
-                    if eleccion == "1" {
-                        ok = install_hyprland();
-                        break;
-                    } else if eleccion == "2" {
-                        ok = install_niri();
+                    if eleccion == "1" || eleccion == "2" {
+                        eleccion_global = eleccion;
                         break;
                     } else if eleccion == "3" {
-                        ok = false;
+                        eleccion_global = eleccion;
                         print_warn("Operación cancelada por el usuario.");
                         break;
                     } else {
                         print_warn("Opción no válida. Por favor, elige 1, 2 o 3.");
                     }
                 }
+
+                if eleccion_global == "3" {
+                    press_enter_to_continue();
+                    continue;
+                }
+
+                if !install_zsh_starship() {
+                    print_err("La instalación de ZSH falló. Abortando 'Instalar TODO'.");
+                    press_enter_to_continue();
+                    continue;
+                }
+
+                let ok = if eleccion_global == "1" {
+                    install_hyprland()
+                } else {
+                    install_niri()
+                };
 
                 if !ok {
                     print_err(
