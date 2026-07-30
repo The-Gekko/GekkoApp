@@ -957,20 +957,41 @@ impl BackupGuard {
             consumed: false,
         }
     }
-    fn keep(&mut self) {
+    fn keep(&mut self, reason: &str) {
         self.consumed = true;
+        print_err(&format!(
+            "Conservando backup.\nRazón: {}\nRuta absoluta: {}\nSe requiere recuperación manual.",
+            reason, self.path
+        ));
     }
     fn consume(&mut self) {
         self.consumed = true;
+    }
+    fn cleanup(&mut self) -> Result<(), ()> {
+        if !self.consumed {
+            match std::process::Command::new("sudo")
+                .args(["rm", "-f", &self.path])
+                .status()
+            {
+                Ok(status) if status.success() => {
+                    self.consumed = true;
+                    Ok(())
+                }
+                _ => Err(()),
+            }
+        } else {
+            Ok(())
+        }
     }
 }
 
 impl Drop for BackupGuard {
     fn drop(&mut self) {
-        if !self.consumed {
-            let _ = std::process::Command::new("sudo")
-                .args(["rm", "-f", &self.path])
-                .status();
+        if !self.consumed && self.cleanup().is_err() {
+            eprintln!(
+                "Atención: Falló la eliminación automática del backup en {}",
+                self.path
+            );
         }
     }
 }
@@ -1217,11 +1238,7 @@ fn install_chaotic_aur() -> bool {
                                 };
                                 if !backup_ok {
                                     print_err("ERROR CRÍTICO: El backup no coincide con la configuración original o no se pudo leer. Se aborta la restauración.");
-                                    backup_guard.keep();
-                                    print_err(&format!(
-                                        "El respaldo manual se encuentra en: {}",
-                                        backup_guard.path
-                                    ));
+                                    backup_guard.keep("El backup no coincide con la configuración original o no se pudo leer.");
                                 } else {
                                     let mut perms_ok = true;
                                     if !run_shell(&format!("sudo chmod 644 {}", backup_guard.path))
@@ -1243,13 +1260,14 @@ fn install_chaotic_aur() -> bool {
                                             print_err(
                                                 "ERROR CRÍTICO: No se pudo restaurar pacman.conf.",
                                             );
-                                            backup_guard.keep();
+                                            backup_guard
+                                                .keep("Fallo al ejecutar mv de restauración.");
                                         } else {
                                             backup_guard.consume();
                                         }
                                     } else {
                                         print_err("ERROR CRÍTICO: No se pudieron establecer permisos en el backup.");
-                                        backup_guard.keep();
+                                        backup_guard.keep("Fallo al establecer permisos 644/root:root en el backup.");
                                     }
                                 }
                             } else {
@@ -1261,16 +1279,17 @@ fn install_chaotic_aur() -> bool {
                                 "Error crítico leyendo pacman.conf en rollback: {}",
                                 e
                             ));
-                            backup_guard.keep();
-                            print_err(&format!(
-                                "El respaldo manual está disponible en: {}",
-                                backup_guard.path
-                            ));
+                            backup_guard.keep("Error de lectura durante el rollback.");
                         }
                     }
                     return false;
                 }
-                backup_guard.consume();
+                if backup_guard.cleanup().is_err() {
+                    print_err(&format!(
+                        "No se pudo eliminar el backup en: {}",
+                        backup_guard.path
+                    ));
+                }
             }
         }
     } else {
@@ -1598,5 +1617,18 @@ Include = /etc/pacman.d/chaotic-mirrorlist
 Include = /etc/pacman.d/mirrorlist
         ";
         assert!(check_chaotic_aur_configured(mixed_repos));
+    }
+
+    #[test]
+    fn test_backup_guard_transitions() {
+        let mut guard_keep = BackupGuard::new("/tmp/test_keep".to_string());
+        assert!(!guard_keep.consumed);
+        guard_keep.keep("Test reason");
+        assert!(guard_keep.consumed);
+
+        let mut guard_consume = BackupGuard::new("/tmp/test_consume".to_string());
+        guard_consume.consume();
+        assert!(guard_consume.consumed);
+        assert_eq!(guard_consume.cleanup(), Ok(())); // Because consumed is true, cleanup returns Ok without executing sudo rm
     }
 }
