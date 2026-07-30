@@ -948,6 +948,17 @@ impl<'a> Drop for LockGuard<'a> {
 struct BackupGuard {
     path: String,
     consumed: bool,
+    remover: fn(&str) -> Result<(), ()>,
+}
+
+fn default_remover(path: &str) -> Result<(), ()> {
+    match std::process::Command::new("sudo")
+        .args(["rm", "-f", path])
+        .status()
+    {
+        Ok(status) if status.success() => Ok(()),
+        _ => Err(()),
+    }
 }
 
 impl BackupGuard {
@@ -955,29 +966,36 @@ impl BackupGuard {
         Self {
             path,
             consumed: false,
+            remover: default_remover,
         }
     }
+
+    fn new_with_remover(path: String, remover: fn(&str) -> Result<(), ()>) -> Self {
+        Self {
+            path,
+            consumed: false,
+            remover,
+        }
+    }
+
     fn keep(&mut self, reason: &str) {
         self.consumed = true;
-        print_err(&format!(
+        eprintln!(
             "Conservando backup.\nRazón: {}\nRuta absoluta: {}\nSe requiere recuperación manual.",
             reason, self.path
-        ));
+        );
     }
     fn consume(&mut self) {
         self.consumed = true;
     }
     fn cleanup(&mut self) -> Result<(), ()> {
         if !self.consumed {
-            match std::process::Command::new("sudo")
-                .args(["rm", "-f", &self.path])
-                .status()
-            {
-                Ok(status) if status.success() => {
+            match (self.remover)(&self.path) {
+                Ok(_) => {
                     self.consumed = true;
                     Ok(())
                 }
-                _ => Err(()),
+                Err(_) => Err(()),
             }
         } else {
             Ok(())
@@ -1232,9 +1250,14 @@ fn install_chaotic_aur() -> bool {
                     match std::fs::read_to_string("/etc/pacman.conf") {
                         Ok(active) => {
                             if active == new_conf {
-                                let backup_ok = match std::fs::read_to_string(&backup_guard.path) {
-                                    Ok(b) => b == current_conf,
-                                    Err(_) => false,
+                                let backup_ok = match std::process::Command::new("sudo")
+                                    .args(["cat", "--", &backup_guard.path])
+                                    .output()
+                                {
+                                    Ok(out) if out.status.success() => {
+                                        out.stdout == current_conf.as_bytes()
+                                    }
+                                    _ => false,
                                 };
                                 if !backup_ok {
                                     print_err("ERROR CRÍTICO: El backup no coincide con la configuración original o no se pudo leer. Se aborta la restauración.");
@@ -1285,10 +1308,10 @@ fn install_chaotic_aur() -> bool {
                     return false;
                 }
                 if backup_guard.cleanup().is_err() {
-                    print_err(&format!(
-                        "No se pudo eliminar el backup en: {}",
+                    eprintln!(
+                        "Atención: Falló la eliminación explícita del backup en: {}",
                         backup_guard.path
-                    ));
+                    );
                 }
             }
         }
@@ -1621,14 +1644,32 @@ Include = /etc/pacman.d/mirrorlist
 
     #[test]
     fn test_backup_guard_transitions() {
-        let mut guard_keep = BackupGuard::new("/tmp/test_keep".to_string());
+        // Test keep()
+        let mut guard_keep =
+            BackupGuard::new_with_remover("/tmp/test_keep".to_string(), |_| Ok(()));
         assert!(!guard_keep.consumed);
         guard_keep.keep("Test reason");
         assert!(guard_keep.consumed);
 
-        let mut guard_consume = BackupGuard::new("/tmp/test_consume".to_string());
+        // Test consume() and subsequent cleanup (should do nothing and return Ok)
+        let mut guard_consume =
+            BackupGuard::new_with_remover("/tmp/test_consume".to_string(), |_| unreachable!());
         guard_consume.consume();
         assert!(guard_consume.consumed);
-        assert_eq!(guard_consume.cleanup(), Ok(())); // Because consumed is true, cleanup returns Ok without executing sudo rm
+        assert_eq!(guard_consume.cleanup(), Ok(()));
+
+        // Test successful cleanup
+        let mut guard_clean =
+            BackupGuard::new_with_remover("/tmp/test_clean".to_string(), |_| Ok(()));
+        assert!(!guard_clean.consumed);
+        assert_eq!(guard_clean.cleanup(), Ok(()));
+        assert!(guard_clean.consumed);
+
+        // Test failing cleanup
+        let mut guard_fail =
+            BackupGuard::new_with_remover("/tmp/test_fail".to_string(), |_| Err(()));
+        assert!(!guard_fail.consumed);
+        assert_eq!(guard_fail.cleanup(), Err(()));
+        assert!(!guard_fail.consumed); // should still be not consumed, drop will retry
     }
 }
