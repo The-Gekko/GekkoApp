@@ -1,6 +1,6 @@
 [package]
 name = "gekkoapp"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2021"
 authors = ["The-Gekko"]
 description = "GekkoApp - Arch Linux Post-Install & Config Tool"
@@ -11,6 +11,12 @@ path = "src/main.rs"
 
 [dependencies]
 crossterm = "0.28"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tar = "0.4"
+ureq = "3"
+zstd = "0.13"
 
 [profile.release]
 opt-level = 3

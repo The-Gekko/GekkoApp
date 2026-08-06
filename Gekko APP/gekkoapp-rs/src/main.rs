@@ -1,6 +1,13 @@
+mod environment;
+mod installer;
+mod kito;
+
+use environment::SystemEnvironment;
+use installer::{InstallPaths, InstallationPlan};
+use kito::{ModuleSelection, ReleaseState};
 use std::io::{self, BufRead, Write};
-use std::process::{Command, Stdio};
 use std::path::Path;
+use std::process::{Command, Stdio};
 use std::thread;
 use std::time::Duration;
 
@@ -11,7 +18,6 @@ use std::time::Duration;
 const RESET: &str = "\x1b[0m";
 
 // Foreground colours
-const FG_BLACK: &str = "\x1b[30m";
 const FG_RED: &str = "\x1b[1;31m";
 const FG_GREEN: &str = "\x1b[1;32m";
 const FG_YELLOW: &str = "\x1b[1;33m";
@@ -19,12 +25,6 @@ const FG_BLUE: &str = "\x1b[1;34m";
 const FG_MAGENTA: &str = "\x1b[1;35m";
 const FG_CYAN: &str = "\x1b[1;36m";
 const FG_WHITE: &str = "\x1b[1;37m";
-
-// Background colours
-const BG_CYAN: &str = "\x1b[46m";
-const BG_MAGENTA: &str = "\x1b[45m";
-const BG_BLACK: &str = "\x1b[40m";
-const BG_BLUE: &str = "\x1b[44m";
 
 // Text decorations
 const BOLD: &str = "\x1b[1m";
@@ -40,16 +40,12 @@ fn clear_screen() {
     let _ = io::stdout().flush();
 }
 
-fn move_cursor(row: u16, col: u16) {
-    print!("\x1b[{};{}H", row, col);
+fn hide_cursor() {
+    print!("\x1b[?25l");
     let _ = io::stdout().flush();
 }
-
-fn hide_cursor() { print!("\x1b[?25l"); let _ = io::stdout().flush(); }
-fn show_cursor() { print!("\x1b[?25h"); let _ = io::stdout().flush(); }
-
-fn print_colored(text: &str, color: &str) {
-    print!("{}{}{}", color, text, RESET);
+fn show_cursor() {
+    print!("\x1b[?25h");
     let _ = io::stdout().flush();
 }
 
@@ -82,41 +78,6 @@ fn print_step(msg: &str) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Animated spinner
-// ─────────────────────────────────────────────────────────────────────────────
-
-fn spinner_run<F>(label: &str, task: F)
-where
-    F: FnOnce() + Send + 'static,
-{
-    let frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-    let label = label.to_string();
-    let (tx, rx) = std::sync::mpsc::channel::<()>();
-
-    let spinner_thread = thread::spawn(move || {
-        let mut i = 0usize;
-        hide_cursor();
-        loop {
-            let frame = frames[i % frames.len()];
-            print!("\r{}{}  {}  {}{}", FG_CYAN, BOLD, frame, label, RESET);
-            let _ = io::stdout().flush();
-            i += 1;
-            match rx.recv_timeout(Duration::from_millis(80)) {
-                Ok(_) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
-                _ => {}
-            }
-        }
-        print!("\r{}{}", " ".repeat(label.len() + 8), "\r");
-        show_cursor();
-        let _ = io::stdout().flush();
-    });
-
-    task();
-    let _ = tx.send(());
-    let _ = spinner_thread.join();
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 //  Progress bar (fake, for visual effect)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -137,9 +98,7 @@ fn fake_progress_bar(label: &str, steps: u32) {
         let pct = i * 100 / steps;
         print!(
             "\r  {}{}  {}{} {}{}{}%{}",
-            FG_MAGENTA, label,
-            RESET, bar,
-            FG_GREEN, BOLD, pct, RESET
+            FG_MAGENTA, label, RESET, bar, FG_GREEN, BOLD, pct, RESET
         );
         let _ = io::stdout().flush();
         thread::sleep(Duration::from_millis(18));
@@ -156,32 +115,29 @@ fn print_header(title: &str) {
     let width = 65usize;
     let inner = format!("  🔮  {}  🔮  ", title);
     let pad_left = (width.saturating_sub(inner.chars().count())) / 2;
-    let pad_right = width.saturating_sub(inner.chars().count()).saturating_sub(pad_left);
+    let pad_right = width
+        .saturating_sub(inner.chars().count())
+        .saturating_sub(pad_left);
 
     println!();
-    println!(
-        "{}{}╔{}╗{}",
-        FG_MAGENTA, BOLD,
-        "═".repeat(width + 2),
-        RESET
-    );
+    println!("{}{}╔{}╗{}", FG_MAGENTA, BOLD, "═".repeat(width + 2), RESET);
     println!(
         "{}{}║{}{}{:pad_left$}{}{}{:pad_right$}{}{}║{}",
-        FG_MAGENTA, BOLD,
+        FG_MAGENTA,
+        BOLD,
         RESET,
-        FG_CYAN, "",
+        FG_CYAN,
+        "",
         inner,
-        FG_CYAN, "",
-        FG_MAGENTA, BOLD,
+        FG_CYAN,
+        "",
+        FG_MAGENTA,
+        BOLD,
         RESET,
-        pad_left = pad_left, pad_right = pad_right
+        pad_left = pad_left,
+        pad_right = pad_right
     );
-    println!(
-        "{}{}╚{}╝{}",
-        FG_MAGENTA, BOLD,
-        "═".repeat(width + 2),
-        RESET
-    );
+    println!("{}{}╚{}╝{}", FG_MAGENTA, BOLD, "═".repeat(width + 2), RESET);
     println!();
 }
 
@@ -236,21 +192,19 @@ fn print_banner() {
     println!();
 
     // Fancy box
-    println!(
-        "  {}{}╭{}╮{}",
-        FG_CYAN, BOLD,
-        "─".repeat(63),
-        RESET
-    );
+    println!("  {}{}╭{}╮{}", FG_CYAN, BOLD, "─".repeat(63), RESET);
 
     let subtitle = "🐉  THE-GEKKO LINUX POST-INSTALL & CONFIG  🐉";
     let pad = (63usize.saturating_sub(subtitle.chars().count())) / 2;
     println!(
         "  {}{}│{}{}{}{}{}{:>pad$}{}│{}",
-        FG_CYAN, BOLD,
+        FG_CYAN,
+        BOLD,
         RESET,
         " ".repeat(pad),
-        FG_WHITE, BOLD, subtitle,
+        FG_WHITE,
+        BOLD,
+        subtitle,
         "",
         FG_CYAN,
         RESET,
@@ -260,17 +214,10 @@ fn print_banner() {
     let by_line = "Arch Linux ❱ Automated Setup ❱ Powered by Rust";
     println!(
         "  {}{}|  {}{}{}{}",
-        FG_CYAN, BOLD,
-        DIM, FG_CYAN, by_line,
-        RESET
+        FG_CYAN, BOLD, DIM, FG_CYAN, by_line, RESET
     );
 
-    println!(
-        "  {}{}╰{}╯{}",
-        FG_CYAN, BOLD,
-        "─".repeat(63),
-        RESET
-    );
+    println!("  {}{}╰{}╯{}", FG_CYAN, BOLD, "─".repeat(63), RESET);
 
     // Bottom gradient bar
     print!("  ");
@@ -293,37 +240,97 @@ struct MenuItem {
 
 fn print_menu() {
     let items = [
-        MenuItem { key: "1", icon: "🐚", label: "Terminal Bonita           (ZSH + Starship + Plugins)", badge: None },
-        MenuItem { key: "2", icon: "🪟", label: "Entorno Hyprland          (Herramientas + Deps)",       badge: None },
-        MenuItem { key: "3", icon: "🪟", label: "Entorno Niri              (Herramientas + Deps)",       badge: None },
-        MenuItem { key: "4", icon: "🎮", label: "Gaming Setup",                                          badge: Some(("NVIDIA", FG_GREEN)) },
-        MenuItem { key: "5", icon: "🎮", label: "Gaming Setup",                                          badge: Some(("INTEL",  FG_BLUE))  },
-        MenuItem { key: "6", icon: "🎮", label: "Gaming Setup",                                          badge: Some(("AMD",    FG_RED))   },
-        MenuItem { key: "7", icon: "📦", label: "Agregar repositorios      Chaotic AUR",                 badge: None },
-        MenuItem { key: "8", icon: "🛍️", label: "Tienda Bauh               (Parcheado + AUR)",           badge: None },
-        MenuItem { key: "9", icon: "✨", label: "Instalar TODO",                                         badge: Some(("Terminal+Hyprland+Niri+Bauh", FG_YELLOW)) },
-        MenuItem { key: "0", icon: "❌", label: "Salir",                                                 badge: None },
+        MenuItem {
+            key: "K",
+            icon: "🦊",
+            label: "Instalar entorno Kito     (KiUI + modulos)",
+            badge: Some(("NUEVO", FG_MAGENTA)),
+        },
+        MenuItem {
+            key: "1",
+            icon: "🐚",
+            label: "Terminal Bonita           (ZSH + Starship + Plugins)",
+            badge: None,
+        },
+        MenuItem {
+            key: "2",
+            icon: "🪟",
+            label: "Entorno Hyprland          (Herramientas + Deps)",
+            badge: None,
+        },
+        MenuItem {
+            key: "3",
+            icon: "🪟",
+            label: "Entorno Niri              (Herramientas + Deps)",
+            badge: None,
+        },
+        MenuItem {
+            key: "4",
+            icon: "🎮",
+            label: "Gaming Setup",
+            badge: Some(("NVIDIA", FG_GREEN)),
+        },
+        MenuItem {
+            key: "5",
+            icon: "🎮",
+            label: "Gaming Setup",
+            badge: Some(("INTEL", FG_BLUE)),
+        },
+        MenuItem {
+            key: "6",
+            icon: "🎮",
+            label: "Gaming Setup",
+            badge: Some(("AMD", FG_RED)),
+        },
+        MenuItem {
+            key: "7",
+            icon: "📦",
+            label: "Agregar repositorios      Chaotic AUR",
+            badge: None,
+        },
+        MenuItem {
+            key: "8",
+            icon: "🛍️",
+            label: "Tienda Bauh               (Parcheado + AUR)",
+            badge: None,
+        },
+        MenuItem {
+            key: "9",
+            icon: "✨",
+            label: "Instalar TODO",
+            badge: Some(("Terminal+Hyprland+Niri+Bauh", FG_YELLOW)),
+        },
+        MenuItem {
+            key: "0",
+            icon: "❌",
+            label: "Salir",
+            badge: None,
+        },
     ];
 
-    println!("  {}{}Selecciona una opción para configurar tu entorno:{}", FG_WHITE, BOLD, RESET);
+    println!(
+        "  {}{}Selecciona una opción para configurar tu entorno:{}",
+        FG_WHITE, BOLD, RESET
+    );
     println!();
 
     for item in &items {
         let key_color = if item.key == "0" { FG_RED } else { FG_CYAN };
         print!(
             "  {}{}[{}]{} {} {}{}{}",
-            key_color, BOLD, item.key, RESET,
-            item.icon,
-            FG_WHITE, item.label, RESET
+            key_color, BOLD, item.key, RESET, item.icon, FG_WHITE, item.label, RESET
         );
         if let Some((badge_text, badge_color)) = item.badge {
-            print!("  {}{}{}{}{}", badge_color, BOLD, badge_text, RESET, "");
+            print!("  {}{}{}{}", badge_color, BOLD, badge_text, RESET);
         }
         println!();
     }
 
     println!();
-    println!("  {}{}{}─────────────────────────────────────────────────────────────{}", FG_CYAN, BOLD, DIM, RESET);
+    println!(
+        "  {}{}{}─────────────────────────────────────────────────────────────{}",
+        FG_CYAN, BOLD, DIM, RESET
+    );
     print!("  {}{}👉 Ingresa una opción:{} ", FG_WHITE, BOLD, RESET);
     let _ = io::stdout().flush();
 }
@@ -345,10 +352,7 @@ fn run_shell(cmd: &str) -> bool {
 }
 
 fn run_shell_piped(cmd: &str) -> (bool, String) {
-    let out = Command::new("bash")
-        .arg("-c")
-        .arg(cmd)
-        .output();
+    let out = Command::new("bash").arg("-c").arg(cmd).output();
     match out {
         Ok(o) => {
             let stdout = String::from_utf8_lossy(&o.stdout).to_string();
@@ -362,7 +366,7 @@ fn is_package_installed(pkg: &str) -> bool {
     run_shell_piped(&format!("pacman -Qq '{pkg}' 2>/dev/null")).0
 }
 
-fn instalar_paquetes(paquetes: &[&str]) {
+fn instalar_paquetes(paquetes: &[&str]) -> bool {
     let faltantes: Vec<&str> = paquetes
         .iter()
         .filter(|&&p| !is_package_installed(p))
@@ -371,7 +375,7 @@ fn instalar_paquetes(paquetes: &[&str]) {
 
     if faltantes.is_empty() {
         print_ok("Todos los paquetes ya están instalados. Saltando...");
-        return;
+        return true;
     }
 
     println_colored(
@@ -387,7 +391,9 @@ fn instalar_paquetes(paquetes: &[&str]) {
     fake_progress_bar("Instalando", 40);
     if !run_shell(&cmd) {
         print_err("Algunos paquetes no pudieron instalarse. Revisa la salida anterior.");
+        return false;
     }
+    true
 }
 
 fn desinstalar_paquetes(paquetes: &[&str]) {
@@ -403,7 +409,10 @@ fn desinstalar_paquetes(paquetes: &[&str]) {
     }
 
     println_colored(
-        &format!("🗑️  Desinstalando {} paquetes innecesarios...", a_eliminar.len()),
+        &format!(
+            "🗑️  Desinstalando {} paquetes innecesarios...",
+            a_eliminar.len()
+        ),
         FG_RED,
     );
     for pkg in &a_eliminar {
@@ -428,7 +437,8 @@ fn configurar_fastfetch() {
     let config_dir = format!("{}/.config/fastfetch", home);
     let _ = std::fs::create_dir_all(&config_dir);
 
-    let config = format!(r#"{{
+    let config = format!(
+        r#"{{
   "$schema": "https://github.com/fastfetch-cli/fastfetch/raw/dev/doc/logo.png",
   "logo": {{
     "type": "kitty-direct",
@@ -474,7 +484,9 @@ fn configurar_fastfetch() {
     {{ "type": "media",    "key": " 🎬 MED ", "keyColor": "cyan" }}
   ]
 }}
-"#, home = home);
+"#,
+        home = home
+    );
 
     let config_path = format!("{}/config.jsonc", config_dir);
     let _ = std::fs::write(&config_path, config);
@@ -487,7 +499,9 @@ fn configurar_fastfetch() {
             let _ = std::fs::copy("./Anime Render.png", &img_dest);
             print_ok("Imagen 'Anime Render.png' copiada a ~/.config/fastfetch/");
         } else {
-            print_warn("Copia tu imagen 'Anime Render.png' en ~/.config/fastfetch/ para el logo kitty.");
+            print_warn(
+                "Copia tu imagen 'Anime Render.png' en ~/.config/fastfetch/ para el logo kitty.",
+            );
         }
     }
 }
@@ -501,8 +515,15 @@ fn install_zsh_starship() {
     thread::sleep(Duration::from_millis(500));
 
     instalar_paquetes(&[
-        "kitty", "git", "zsh", "nano", "curl",
-        "eza", "fastfetch", "fzf", "ttf-jetbrains-mono-nerd",
+        "kitty",
+        "git",
+        "zsh",
+        "nano",
+        "curl",
+        "eza",
+        "fastfetch",
+        "fzf",
+        "ttf-jetbrains-mono-nerd",
     ]);
 
     run_shell("fc-cache -fv > /dev/null 2>&1");
@@ -521,11 +542,23 @@ fn install_zsh_starship() {
     run_shell("mkdir -p ~/.zsh");
 
     let plugins = [
-        ("zsh-autosuggestions",       "https://github.com/zsh-users/zsh-autosuggestions"),
-        ("zsh-syntax-highlighting",   "https://github.com/zsh-users/zsh-syntax-highlighting"),
-        ("zsh-history-substring-search", "https://github.com/zsh-users/zsh-history-substring-search"),
-        ("zsh-completions",           "https://github.com/zsh-users/zsh-completions"),
-        ("z",                         "https://github.com/rupa/z.git"),
+        (
+            "zsh-autosuggestions",
+            "https://github.com/zsh-users/zsh-autosuggestions",
+        ),
+        (
+            "zsh-syntax-highlighting",
+            "https://github.com/zsh-users/zsh-syntax-highlighting",
+        ),
+        (
+            "zsh-history-substring-search",
+            "https://github.com/zsh-users/zsh-history-substring-search",
+        ),
+        (
+            "zsh-completions",
+            "https://github.com/zsh-users/zsh-completions",
+        ),
+        ("z", "https://github.com/rupa/z.git"),
     ];
 
     for (name, url) in &plugins {
@@ -644,11 +677,27 @@ bindkey '^[[1;5D' backward-word
 fn install_hyprland() {
     print_header("INSTALANDO PRESET HYPRLAND");
     instalar_paquetes(&[
-        "gedit", "electron", "gnome-keyring", "polkit-gnome",
-        "xdg-desktop-portal-gtk", "xwayland-satellite", "nwg-look",
-        "blueman", "ibus", "unzip", "colord", "bolt", "flatpak",
-        "gnome-disk-utility", "gvfs-mtp", "gvfs-gphoto2", "libmtp",
-        "nautilus", "fuse2", "ddcutil", "i2c-dev",
+        "gedit",
+        "electron",
+        "gnome-keyring",
+        "polkit-gnome",
+        "xdg-desktop-portal-gtk",
+        "xwayland-satellite",
+        "nwg-look",
+        "blueman",
+        "ibus",
+        "unzip",
+        "colord",
+        "bolt",
+        "flatpak",
+        "gnome-disk-utility",
+        "gvfs-mtp",
+        "gvfs-gphoto2",
+        "libmtp",
+        "nautilus",
+        "fuse2",
+        "ddcutil",
+        "i2c-dev",
     ]);
     desinstalar_paquetes(&["dolphin", "polkit-kde-agent", "wofi"]);
     print_ok("Evaluación de dependencias de Hyprland finalizada.");
@@ -658,12 +707,32 @@ fn install_hyprland() {
 fn install_niri() {
     print_header("INSTALANDO PRESET NIRI");
     instalar_paquetes(&[
-        "gedit", "xdg-desktop-portal-gnome", "gnome-keyring", "polkit-gnome",
-        "xdg-desktop-portal-gtk", "electron", "xwayland-satellite",
-        "gnome-disk-utility", "qt5-wayland", "qt6-wayland", "nwg-look",
-        "flatpak", "blueman", "gvfs-mtp", "gvfs-gphoto2", "libmtp",
-        "ibus", "unzip", "colord", "bolt", "fuse2", "ddcutil", "i2c-dev",
-        "playerctl", "gpsd", "dconf-editor",
+        "gedit",
+        "xdg-desktop-portal-gnome",
+        "gnome-keyring",
+        "polkit-gnome",
+        "xdg-desktop-portal-gtk",
+        "electron",
+        "xwayland-satellite",
+        "gnome-disk-utility",
+        "qt5-wayland",
+        "qt6-wayland",
+        "nwg-look",
+        "flatpak",
+        "blueman",
+        "gvfs-mtp",
+        "gvfs-gphoto2",
+        "libmtp",
+        "ibus",
+        "unzip",
+        "colord",
+        "bolt",
+        "fuse2",
+        "ddcutil",
+        "i2c-dev",
+        "playerctl",
+        "gpsd",
+        "dconf-editor",
     ]);
     desinstalar_paquetes(&["mako", "swaybg", "swayidle", "swaylock", "waybar"]);
     print_ok("Evaluación de dependencias de Niri finalizada.");
@@ -676,7 +745,9 @@ fn install_chaotic_aur() {
     let already = run_shell("grep -q '\\[chaotic-aur\\]' /etc/pacman.conf");
     if already {
         // Sanity-check: remove duplicate entries if any were added accidentally
-        run_shell(r#"sudo awk '/\[chaotic-aur\]/{found++} found>1{next} {print}' /etc/pacman.conf | sudo tee /etc/pacman.conf.dedup > /dev/null && sudo mv /etc/pacman.conf.dedup /etc/pacman.conf"#);
+        run_shell(
+            r#"sudo awk '/\[chaotic-aur\]/{found++} found>1{next} {print}' /etc/pacman.conf | sudo tee /etc/pacman.conf.dedup > /dev/null && sudo mv /etc/pacman.conf.dedup /etc/pacman.conf"#,
+        );
         print_ok("Chaotic AUR ya está configurado en pacman.conf. Saltando...");
         thread::sleep(Duration::from_secs(2));
         return;
@@ -693,7 +764,9 @@ fn install_chaotic_aur() {
     run_shell("sudo pacman -U --noconfirm 'https://cdn-mirror.chaotic.cx/chaotic-aur/chaotic-mirrorlist.pkg.tar.zst'");
 
     print_info("Editando /etc/pacman.conf automáticamente...");
-    run_shell(r#"echo -e '\n[chaotic-aur]\nInclude = /etc/pacman.d/chaotic-mirrorlist' | sudo tee -a /etc/pacman.conf > /dev/null"#);
+    run_shell(
+        r#"echo -e '\n[chaotic-aur]\nInclude = /etc/pacman.d/chaotic-mirrorlist' | sudo tee -a /etc/pacman.conf > /dev/null"#,
+    );
 
     print_info("Sincronizando repositorios y actualizando el sistema...");
     run_shell("sudo pacman -Syu");
@@ -708,7 +781,7 @@ fn install_bauh() {
 
     print_info("Buscando archivo gems.py de bauh...");
     let (ok, gems_path) = run_shell_piped(
-        "ls /usr/lib/python*/site-packages/bauh/view/core/gems.py 2>/dev/null | head -n 1"
+        "ls /usr/lib/python*/site-packages/bauh/view/core/gems.py 2>/dev/null | head -n 1",
     );
 
     let gems_path = gems_path.trim().to_string();
@@ -718,7 +791,10 @@ fn install_bauh() {
         return;
     }
 
-    print_info(&format!("Aplicando parche de compatibilidad en: {}", gems_path));
+    print_info(&format!(
+        "Aplicando parche de compatibilidad en: {}",
+        gems_path
+    ));
 
     let patch = r#"import inspect
 import os
@@ -817,9 +893,9 @@ def load_managers(locale: str, context: ApplicationContext, config: dict, defaul
 fn install_gaming(gpu: &str, vulkan_choice: &str) {
     let label = match gpu {
         "nvidia" => "INSTALANDO UTILIDADES GAMING  ·  NVIDIA",
-        "intel"  => "INSTALANDO UTILIDADES GAMING  ·  INTEL",
-        "amd"    => "INSTALANDO UTILIDADES GAMING  ·  AMD",
-        _        => "INSTALANDO UTILIDADES GAMING",
+        "intel" => "INSTALANDO UTILIDADES GAMING  ·  INTEL",
+        "amd" => "INSTALANDO UTILIDADES GAMING  ·  AMD",
+        _ => "INSTALANDO UTILIDADES GAMING",
     };
     print_header(label);
 
@@ -827,7 +903,10 @@ fn install_gaming(gpu: &str, vulkan_choice: &str) {
     run_shell("sudo pacman -Sy --noconfirm 2>/dev/null || true");
 
     // Steam: pipe the vulkan driver selection answer
-    let steam_cmd = format!("echo -e '{}\\ns' | sudo pacman -S --needed steam || true", vulkan_choice);
+    let steam_cmd = format!(
+        "echo -e '{}\\ns' | sudo pacman -S --needed steam || true",
+        vulkan_choice
+    );
     run_shell(&steam_cmd);
 
     // Bug fix #1: dxvk tiene múltiples proveedores en chaotic-aur,
@@ -846,8 +925,12 @@ fn install_gaming(gpu: &str, vulkan_choice: &str) {
 
     // Paquetes gaming principales (sin dxvk que ya se instaló arriba)
     instalar_paquetes(&[
-        "protonplus", "spotify", "discord",
-        "gamemode", "gedit", "flatpak",
+        "protonplus",
+        "spotify",
+        "discord",
+        "gamemode",
+        "gedit",
+        "flatpak",
     ]);
 
     // proton-ge-custom-bin por separado para manejar errores sin abortar todo
@@ -868,20 +951,6 @@ fn install_gaming(gpu: &str, vulkan_choice: &str) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Startup check: Chaotic AUR
-// ─────────────────────────────────────────────────────────────────────────────
-
-fn check_chaotic_aur_startup() {
-    print_info("Revisando configuración de repositorios Chaotic AUR...");
-    let (_, out) = run_shell_piped("grep -q '\\[chaotic-aur\\]' /etc/pacman.conf && echo yes");
-    if out.trim() == "yes" {
-        print_ok("Chaotic AUR ya está configurado.");
-    } else {
-        install_chaotic_aur();
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 //  Main loop
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -894,15 +963,264 @@ fn read_line() -> String {
 
 fn press_enter_to_continue() {
     println!();
-    print!("  {}{}Presiona ENTER para volver al menú...{} ", FG_CYAN, DIM, RESET);
+    print!(
+        "  {}{}Presiona ENTER para volver al menú...{} ",
+        FG_CYAN, DIM, RESET
+    );
     let _ = io::stdout().flush();
     read_line();
 }
 
-fn main() {
-    // Check and install Chaotic AUR at startup
-    check_chaotic_aur_startup();
+fn print_detected_environment(environment: &SystemEnvironment) {
+    println!("  {}{}Entorno detectado{}", FG_WHITE, BOLD, RESET);
+    println!(
+        "  {}Distribucion:{} {} ({})",
+        DIM, RESET, environment.distro_name, environment.distro_id
+    );
+    println!(
+        "  {}Arquitectura:{} {}",
+        DIM, RESET, environment.architecture
+    );
+    println!("  {}Sesion:{} {}", DIM, RESET, environment.session);
+    println!("  {}Escritorio:{} {}", DIM, RESET, environment.desktop);
+    println!(
+        "  {}Servicios:{} {}",
+        DIM, RESET, environment.service_manager
+    );
+    println!(
+        "  {}Paquetes:{} {}",
+        DIM, RESET, environment.package_manager
+    );
+    if environment.compatibility.supported {
+        print_ok("Entorno compatible con la primera version de Kito.");
+    } else {
+        print_warn("El entorno no esta soportado completamente.");
+        for reason in &environment.compatibility.reasons {
+            println!("    {}- {}{}", FG_YELLOW, reason, RESET);
+        }
+    }
+}
 
+fn prompt_with_default(label: &str, current: &str) -> String {
+    print!("  {}{}{} [{}]:{} ", FG_CYAN, BOLD, label, current, RESET);
+    let _ = io::stdout().flush();
+    let value = read_line();
+    if value.is_empty() {
+        current.to_string()
+    } else {
+        value.to_ascii_lowercase()
+    }
+}
+
+fn confirm_or_override_environment(
+    mut environment: SystemEnvironment,
+) -> Option<SystemEnvironment> {
+    loop {
+        print_detected_environment(&environment);
+        println!();
+        println!("  {}[1]{} Usar deteccion", FG_CYAN, RESET);
+        println!("  {}[2]{} Corregir deteccion manualmente", FG_CYAN, RESET);
+        println!("  {}[0]{} Cancelar", FG_RED, RESET);
+        print!("  {}Opcion:{} ", BOLD, RESET);
+        let _ = io::stdout().flush();
+        match read_line().as_str() {
+            "1" => return Some(environment),
+            "2" => {
+                environment.distro_id =
+                    prompt_with_default("ID de distribucion", &environment.distro_id);
+                environment.distro_name = environment.distro_id.clone();
+                environment.session = prompt_with_default("Sesion", &environment.session);
+                environment.desktop = prompt_with_default("Escritorio", &environment.desktop);
+                environment.refresh_compatibility();
+                println!();
+            }
+            "0" => return None,
+            _ => print_warn("Selecciona 1, 2 o 0."),
+        }
+    }
+}
+
+fn select_kito_modules() -> Option<ModuleSelection> {
+    let mut selection = ModuleSelection::default();
+    loop {
+        clear_screen();
+        print_header("MODULOS DEL ENTORNO KITO");
+        println!("  {}Obligatorios{}", BOLD, RESET);
+        println!("  {}[✓]{} KiUI", FG_GREEN, RESET);
+        println!("  {}[✓]{} Kitsune Compositor", FG_GREEN, RESET);
+        println!();
+        println!("  {}Selecciona uno o varios modulos{}", BOLD, RESET);
+        println!(
+            "  [{}] [1] Kitowall       Wallpapers estaticos",
+            if selection.kitowall { "x" } else { " " }
+        );
+        println!(
+            "  [{}] [2] Kilivepaper    Live wallpapers",
+            if selection.kilivepaper { "x" } else { " " }
+        );
+        println!(
+            "  {}[--] [3] Kitsune        Espectro de audio  [PROXIMAMENTE]{}",
+            DIM, RESET
+        );
+        println!();
+        println!("  {}[4]{} Continuar", FG_CYAN, RESET);
+        println!("  {}[0]{} Cancelar", FG_RED, RESET);
+        print!("  {}Opcion:{} ", BOLD, RESET);
+        let _ = io::stdout().flush();
+        match read_line().as_str() {
+            "1" => selection.kitowall = !selection.kitowall,
+            "2" => selection.kilivepaper = !selection.kilivepaper,
+            "3" => {
+                print_warn("Kitsune estara disponible proximamente.");
+                thread::sleep(Duration::from_secs(1));
+            }
+            "4" if selection.has_product() => return Some(selection),
+            "4" => {
+                print_warn("Selecciona al menos Kitowall o Kilivepaper.");
+                thread::sleep(Duration::from_secs(2));
+            }
+            "0" => return None,
+            _ => {
+                print_warn("Opcion no valida.");
+                thread::sleep(Duration::from_secs(1));
+            }
+        }
+    }
+}
+
+fn install_kito_environment() {
+    clear_screen();
+    print_header("INSTALAR ENTORNO KITO");
+    let Some(environment) = confirm_or_override_environment(SystemEnvironment::detect()) else {
+        return;
+    };
+    if !environment.compatibility.supported {
+        print_err("La instalacion se bloqueo para evitar una configuracion incompatible.");
+        print_info(
+            "La deteccion manual corrige falsos positivos; no habilita soporte inexistente.",
+        );
+        return;
+    }
+    let Some(target) = environment.target() else {
+        print_err("No existe un target de release para esta arquitectura.");
+        return;
+    };
+    let Some(selection) = select_kito_modules() else {
+        return;
+    };
+    let plan = selection.plan();
+
+    clear_screen();
+    print_header("VERIFICANDO RELEASES DE KITO");
+    print_info("Consultando releases estables publicados en GitHub...");
+    let statuses = kito::resolve_releases(&plan, target);
+    println!();
+    for status in &statuses {
+        match &status.state {
+            ReleaseState::Available {
+                version,
+                tag,
+                manifest_url,
+                ..
+            } => {
+                print_ok(&format!(
+                    "{} {} ({})",
+                    status.component.label(),
+                    version,
+                    tag
+                ));
+                println!("      {}{}{}", DIM, manifest_url, RESET);
+            }
+            ReleaseState::Unavailable(reason) => {
+                print_err(&format!("{}: {}", status.component.label(), reason));
+            }
+        }
+    }
+
+    println!();
+    if !kito::all_available(&statuses) {
+        print_warn("No se modifico el sistema: faltan releases obligatorios.");
+        print_info("Publica los releases marcados como no disponibles y vuelve a intentarlo.");
+        return;
+    }
+
+    print_step("Descargando y validando manifiestos...");
+    let installation = match InstallationPlan::prepare(&statuses, target) {
+        Ok(installation) => installation,
+        Err(error) => {
+            print_err(&format!("No se pudo preparar la instalacion: {error}"));
+            return;
+        }
+    };
+    let packages = installation.required_arch_packages();
+    print_ok("Preflight completo: manifests, dependencias y artefactos son coherentes.");
+    println!();
+    println!("  {}Componentes:{}", BOLD, RESET);
+    for release in &installation.releases {
+        println!(
+            "    - {} {}",
+            release.component.label(),
+            release.manifest.product.version
+        );
+    }
+    println!("  {}Dependencias del sistema:{}", BOLD, RESET);
+    if packages.is_empty() {
+        println!("    - Ninguna adicional");
+    } else {
+        println!("    - {}", packages.join(", "));
+    }
+    println!();
+    print!("  {}Instalar este plan?{} [s/N]: ", FG_YELLOW, RESET);
+    let _ = io::stdout().flush();
+    if !matches!(read_line().to_ascii_lowercase().as_str(), "s" | "si") {
+        print_info("Instalacion cancelada sin modificar el sistema.");
+        return;
+    }
+
+    let paths = match InstallPaths::detect() {
+        Ok(paths) => paths,
+        Err(error) => {
+            print_err(&format!("No se pudieron resolver las rutas XDG: {error}"));
+            return;
+        }
+    };
+    print_step("Descargando y verificando todos los artefactos antes de modificar paquetes...");
+    if let Err(error) = installation.prefetch(&paths) {
+        print_err(&format!("No se pudieron preparar los artefactos: {error}"));
+        return;
+    }
+    if !instalar_paquetes(&packages) {
+        print_err("Se aborto antes de instalar los artefactos Kito.");
+        return;
+    }
+    print_step("Descargando, verificando e instalando artefactos Kito...");
+    match installation.install(&paths) {
+        Ok(state) => {
+            print_ok(&format!(
+                "Entorno Kito instalado: {} componentes activos.",
+                state.modules.len()
+            ));
+            println!(
+                "      {}Estado: {}{}",
+                DIM,
+                paths.state_file().display(),
+                RESET
+            );
+            println!(
+                "      {}Ejecuta KiUI con: {}/kiui{}",
+                DIM,
+                paths.bin_home.display(),
+                RESET
+            );
+        }
+        Err(error) => {
+            print_err(&format!("La instalacion no pudo completarse: {error}"));
+            print_info("Los releases versionados no activados pueden permanecer en cache.");
+        }
+    }
+}
+
+fn main() {
     loop {
         print_banner();
         print_menu();
@@ -910,6 +1228,10 @@ fn main() {
         let option = read_line();
 
         match option.as_str() {
+            "k" | "K" => {
+                install_kito_environment();
+                press_enter_to_continue();
+            }
             "1" => {
                 install_zsh_starship();
                 press_enter_to_continue();
