@@ -66,7 +66,9 @@ archivo `*-<target>.manifest.json` en el release encontrado.
 
 Se respetan `XDG_BIN_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME` y
 `XDG_STATE_HOME` cuando estan definidos. El `.desktop` ejecuta el entrypoint
-absoluto de KiUI, por lo que no depende del `PATH` de la sesion grafica.
+absoluto de KiUI y le entrega mediante variables `KIUI_*_BIN` las rutas absolutas
+de los CLI del ecosistema. Por ello ni KiUI ni sus modulos dependen del `PATH` de
+la sesion grafica.
 
 ## Responsabilidades
 
