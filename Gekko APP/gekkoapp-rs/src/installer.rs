@@ -1105,6 +1105,7 @@ fn desktop_exec_quote(path: &str) -> String {
 fn kiui_runtime_environment(paths: &InstallPaths) -> Result<String, String> {
     let variables = [
         ("KIUI_COMPOSITOR_BIN", "kitsune-compositor"),
+        ("KITSUNE_COMPOSITOR_BIN", "kitsune-compositor"),
         ("KIUI_KITOWALL_BIN", "kitowall"),
         ("KIUI_KILIVEPAPER_BIN", "kilivepaper"),
         ("KIUI_KITSUNE_BIN", "kitsune"),
@@ -1182,6 +1183,8 @@ mod tests {
         assert!(environment.starts_with("/usr/bin/env "));
         assert!(environment
             .contains("KIUI_COMPOSITOR_BIN=\"/home/Kito User/.local/bin/kitsune-compositor\""));
+        assert!(environment
+            .contains("KITSUNE_COMPOSITOR_BIN=\"/home/Kito User/.local/bin/kitsune-compositor\""));
         assert!(
             environment.contains("KIUI_KILIVEPAPER_BIN=\"/home/Kito User/.local/bin/kilivepaper\"")
         );
