@@ -78,8 +78,9 @@ modificar el sistema.
 
 La primera matriz soportada es Arch Linux `x86_64`, Wayland, Hyprland y servicios
 de usuario de systemd. KiUI y Kitsune Compositor son componentes obligatorios;
-Kitowall y Kilivepaper se seleccionan como módulos independientes. Kitsune se
-muestra como próximamente y permanece deshabilitado hasta publicar su release.
+Kitowall, Kilivepaper y KiSDDM se seleccionan como módulos independientes.
+Kitsune se muestra como próximamente y permanece deshabilitado hasta publicar su
+release.
 
 El diseño y estado de implementación se documentan en
 [`docs/entorno-kito.md`](docs/entorno-kito.md).

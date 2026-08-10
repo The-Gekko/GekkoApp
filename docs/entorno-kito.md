@@ -12,8 +12,8 @@ responsabilidad corresponde a los CLI y a Kitsune Compositor.
 2. GekkoApp detecta `/etc/os-release`, arquitectura, tipo de sesion, escritorio,
    gestor de paquetes y disponibilidad de systemd.
 3. El resultado se muestra antes de continuar y puede corregirse manualmente.
-4. El usuario selecciona Kitowall y/o Kilivepaper. Kitsune se muestra como
-   proximamente y no puede agregarse al plan.
+4. El usuario selecciona Kitowall, Kilivepaper y/o KiSDDM. Kitsune se muestra
+   como proximamente y no puede agregarse al plan.
 5. KiUI y Kitsune Compositor se agregan obligatoriamente al plan.
 6. GekkoApp consulta el release estable mas reciente de cada repositorio.
 7. Descarga y valida todos los manifests, incluida la plataforma, glibc minima,
@@ -48,6 +48,7 @@ diagnostico correcto, pero todavia no habilita su instalacion.
 | Kitsune Compositor | KitotsuMolina/Kito-compositor | obligatorio |
 | Kitowall | KitotsuMolina/KitowallV2 | seleccionable |
 | Kilivepaper | KitotsuMolina/Kilivepaper | seleccionable |
+| KiSDDM | KitotsuMolina/KiSDDM | seleccionable |
 | Kitsune | KitotsuMolina/KitsuneV2 | proximamente, deshabilitado |
 
 GekkoApp no fija versiones en el codigo. Consulta GitHub Releases y exige un
@@ -89,10 +90,10 @@ que decide como materializarlas para el escritorio y sistema compatibles.
 - Instalacion versionada, entrypoints, `.desktop`, iconos y estado: implementada.
 - Sobrescritura de rutas ajenas: bloqueada.
 
-Al 4 de agosto de 2026, Kitsune Compositor `v0.1.1`, KiUI `v0.1.1`, Kitowall
-`v0.1.0` y Kilivepaper `v2.1.1` tienen releases compatibles. El preflight
-conjunto de estos cuatro componentes esta validado. Kitsune todavia requiere su
-propio release antes de poder seleccionarse.
+Kitsune Compositor, KiUI, Kitowall, Kilivepaper y KiSDDM publican releases
+compatibles con este contrato. GekkoApp resuelve sus versiones estables más
+recientes durante el preflight, sin fijarlas en el código. Kitsune todavía
+requiere su propio release antes de poder seleccionarse.
 
 ## Seguridad
 
