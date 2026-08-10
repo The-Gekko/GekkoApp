@@ -8,6 +8,7 @@ pub enum ComponentId {
     Kiui,
     Kitowall,
     Kilivepaper,
+    Kisddm,
 }
 
 impl ComponentId {
@@ -17,6 +18,7 @@ impl ComponentId {
             Self::Kiui => "KiUI",
             Self::Kitowall => "Kitowall (wallpapers estaticos)",
             Self::Kilivepaper => "Kilivepaper (live wallpapers)",
+            Self::Kisddm => "KiSDDM (pantalla de inicio SDDM)",
         }
     }
 
@@ -26,6 +28,7 @@ impl ComponentId {
             Self::Kiui => "KitotsuMolina/KiUI",
             Self::Kitowall => "KitotsuMolina/KitowallV2",
             Self::Kilivepaper => "KitotsuMolina/Kilivepaper",
+            Self::Kisddm => "KitotsuMolina/KiSDDM",
         }
     }
 }
@@ -34,11 +37,12 @@ impl ComponentId {
 pub struct ModuleSelection {
     pub kitowall: bool,
     pub kilivepaper: bool,
+    pub kisddm: bool,
 }
 
 impl ModuleSelection {
     pub fn has_product(&self) -> bool {
-        self.kitowall || self.kilivepaper
+        self.kitowall || self.kilivepaper || self.kisddm
     }
 
     pub fn plan(&self) -> Vec<ComponentId> {
@@ -48,6 +52,9 @@ impl ModuleSelection {
         }
         if self.kilivepaper {
             components.insert(ComponentId::Kilivepaper);
+        }
+        if self.kisddm {
+            components.insert(ComponentId::Kisddm);
         }
         components.into_iter().collect()
     }
@@ -168,6 +175,7 @@ mod tests {
         assert!(plan.contains(&ComponentId::Compositor));
         assert!(plan.contains(&ComponentId::Kiui));
         assert!(plan.contains(&ComponentId::Kilivepaper));
+        assert!(!plan.contains(&ComponentId::Kisddm));
         assert!(!plan.contains(&ComponentId::Kitowall));
     }
 
@@ -179,5 +187,15 @@ mod tests {
             ..ModuleSelection::default()
         }
         .has_product());
+    }
+
+    #[test]
+    fn kisddm_can_be_selected_as_a_product_module() {
+        let selection = ModuleSelection {
+            kisddm: true,
+            ..ModuleSelection::default()
+        };
+        assert!(selection.has_product());
+        assert!(selection.plan().contains(&ComponentId::Kisddm));
     }
 }

@@ -1059,24 +1059,29 @@ fn select_kito_modules() -> Option<ModuleSelection> {
             if selection.kilivepaper { "x" } else { " " }
         );
         println!(
-            "  {}[--] [3] Kitsune        Espectro de audio  [PROXIMAMENTE]{}",
+            "  [{}] [3] KiSDDM          Pantalla de inicio SDDM",
+            if selection.kisddm { "x" } else { " " }
+        );
+        println!(
+            "  {}[--] [4] Kitsune        Espectro de audio  [PROXIMAMENTE]{}",
             DIM, RESET
         );
         println!();
-        println!("  {}[4]{} Continuar", FG_CYAN, RESET);
+        println!("  {}[5]{} Continuar", FG_CYAN, RESET);
         println!("  {}[0]{} Cancelar", FG_RED, RESET);
         print!("  {}Opcion:{} ", BOLD, RESET);
         let _ = io::stdout().flush();
         match read_line().as_str() {
             "1" => selection.kitowall = !selection.kitowall,
             "2" => selection.kilivepaper = !selection.kilivepaper,
-            "3" => {
+            "3" => selection.kisddm = !selection.kisddm,
+            "4" => {
                 print_warn("Kitsune estara disponible proximamente.");
                 thread::sleep(Duration::from_secs(1));
             }
-            "4" if selection.has_product() => return Some(selection),
-            "4" => {
-                print_warn("Selecciona al menos Kitowall o Kilivepaper.");
+            "5" if selection.has_product() => return Some(selection),
+            "5" => {
+                print_warn("Selecciona al menos Kitowall, Kilivepaper o KiSDDM.");
                 thread::sleep(Duration::from_secs(2));
             }
             "0" => return None,

@@ -1042,6 +1042,7 @@ fn component_id(component: ComponentId) -> &'static str {
         ComponentId::Kiui => "kiui",
         ComponentId::Kitowall => "kitowall",
         ComponentId::Kilivepaper => "kilivepaper",
+        ComponentId::Kisddm => "kisddm",
     }
 }
 
@@ -1108,6 +1109,7 @@ fn kiui_runtime_environment(paths: &InstallPaths) -> Result<String, String> {
         ("KITSUNE_COMPOSITOR_BIN", "kitsune-compositor"),
         ("KIUI_KITOWALL_BIN", "kitowall"),
         ("KIUI_KILIVEPAPER_BIN", "kilivepaper"),
+        ("KIUI_KISDDM_BIN", "kisddm"),
         ("KIUI_KITSUNE_BIN", "kitsune"),
     ];
     let assignments = variables
@@ -1188,6 +1190,7 @@ mod tests {
         assert!(
             environment.contains("KIUI_KILIVEPAPER_BIN=\"/home/Kito User/.local/bin/kilivepaper\"")
         );
+        assert!(environment.contains("KIUI_KISDDM_BIN=\"/home/Kito User/.local/bin/kisddm\""));
     }
 
     #[test]
