@@ -1,4 +1,12 @@
 #![allow(dead_code, clippy::print_literal)]
+
+mod environment;
+mod installer;
+mod kito;
+
+use environment::SystemEnvironment;
+use installer::{InstallPaths, InstallationPlan};
+use kito::{ModuleSelection, ReleaseState};
 use std::io::{self, BufRead, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -33,11 +41,6 @@ const ITALIC: &str = "\x1b[3m";
 
 fn clear_screen() {
     print!("\x1b[2J\x1b[H");
-    let _ = io::stdout().flush();
-}
-
-fn move_cursor(row: u16, col: u16) {
-    print!("\x1b[{};{}H", row, col);
     let _ = io::stdout().flush();
 }
 
@@ -81,41 +84,6 @@ fn print_err(msg: &str) {
 
 fn print_step(msg: &str) {
     println!("{}  ➜   {}{}{}", FG_MAGENTA, ITALIC, msg, RESET);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  Animated spinner
-// ─────────────────────────────────────────────────────────────────────────────
-
-fn spinner_run<F>(label: &str, task: F)
-where
-    F: FnOnce() + Send + 'static,
-{
-    let frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-    let label = label.to_string();
-    let (tx, rx) = std::sync::mpsc::channel::<()>();
-
-    let spinner_thread = thread::spawn(move || {
-        let mut i = 0usize;
-        hide_cursor();
-        loop {
-            let frame = frames[i % frames.len()];
-            print!("\r{}{}  {}  {}{}", FG_CYAN, BOLD, frame, label, RESET);
-            let _ = io::stdout().flush();
-            i += 1;
-            match rx.recv_timeout(Duration::from_millis(80)) {
-                Ok(_) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
-                _ => {}
-            }
-        }
-        print!("\r{}{}", " ".repeat(label.len() + 8), "\r");
-        show_cursor();
-        let _ = io::stdout().flush();
-    });
-
-    task();
-    let _ = tx.send(());
-    let _ = spinner_thread.join();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -281,6 +249,12 @@ struct MenuItem {
 
 fn print_menu() {
     let items = [
+        MenuItem {
+            key: "K",
+            icon: "🦊",
+            label: "Instalar entorno Kito     (KiUI + modulos)",
+            badge: Some(("NUEVO", FG_MAGENTA)),
+        },
         MenuItem {
             key: "1",
             icon: "🐚",
@@ -833,6 +807,7 @@ fn install_hyprland() -> bool {
         print_warn("Hubo un problema o se canceló la desinstalación. Abortando instalación.");
         return false;
     }
+
     print_ok("Evaluación de dependencias de Hyprland finalizada.");
     thread::sleep(Duration::from_secs(2));
     true
@@ -1462,10 +1437,261 @@ fn check_chaotic_aur_startup() {
 //  Main loop
 // ─────────────────────────────────────────────────────────────────────────────
 
-fn main() {
-    // Check Chaotic AUR at startup as diagnostic only
-    check_chaotic_aur_startup();
+fn print_detected_environment(environment: &SystemEnvironment) {
+    println!("  {}{}Entorno detectado{}", FG_WHITE, BOLD, RESET);
+    println!(
+        "  {}Distribucion:{} {} ({})",
+        DIM, RESET, environment.distro_name, environment.distro_id
+    );
+    println!(
+        "  {}Arquitectura:{} {}",
+        DIM, RESET, environment.architecture
+    );
+    println!("  {}Sesion:{} {}", DIM, RESET, environment.session);
+    println!("  {}Escritorio:{} {}", DIM, RESET, environment.desktop);
+    println!(
+        "  {}Servicios:{} {}",
+        DIM, RESET, environment.service_manager
+    );
+    println!(
+        "  {}Paquetes:{} {}",
+        DIM, RESET, environment.package_manager
+    );
+    if environment.compatibility.supported {
+        print_ok("Entorno compatible con la primera version de Kito.");
+    } else {
+        print_warn("El entorno no esta soportado completamente.");
+        for reason in &environment.compatibility.reasons {
+            println!("    {}- {}{}", FG_YELLOW, reason, RESET);
+        }
+    }
+}
 
+fn prompt_with_default(label: &str, current: &str) -> String {
+    print!("  {}{}{} [{}]:{} ", FG_CYAN, BOLD, label, current, RESET);
+    let _ = io::stdout().flush();
+    let value = read_line();
+    if value.is_empty() {
+        current.to_string()
+    } else {
+        value.to_ascii_lowercase()
+    }
+}
+
+fn confirm_or_override_environment(
+    mut environment: SystemEnvironment,
+) -> Option<SystemEnvironment> {
+    loop {
+        print_detected_environment(&environment);
+        println!();
+        println!("  {}[1]{} Usar deteccion", FG_CYAN, RESET);
+        println!("  {}[2]{} Corregir deteccion manualmente", FG_CYAN, RESET);
+        println!("  {}[0]{} Cancelar", FG_RED, RESET);
+        print!("  {}Opcion:{} ", BOLD, RESET);
+        let _ = io::stdout().flush();
+        match read_line().as_str() {
+            "1" => return Some(environment),
+            "2" => {
+                environment.distro_id =
+                    prompt_with_default("ID de distribucion", &environment.distro_id);
+                environment.distro_name = environment.distro_id.clone();
+                environment.session = prompt_with_default("Sesion", &environment.session);
+                environment.desktop = prompt_with_default("Escritorio", &environment.desktop);
+                environment.refresh_compatibility();
+                println!();
+            }
+            "0" => return None,
+            _ => print_warn("Selecciona 1, 2 o 0."),
+        }
+    }
+}
+
+fn select_kito_modules() -> Option<ModuleSelection> {
+    let mut selection = ModuleSelection::default();
+    loop {
+        clear_screen();
+        print_header("MODULOS DEL ENTORNO KITO");
+        println!("  {}Obligatorios{}", BOLD, RESET);
+        println!("  {}[✓]{} KiUI", FG_GREEN, RESET);
+        println!("  {}[✓]{} Kitsune Compositor", FG_GREEN, RESET);
+        println!();
+        println!("  {}Selecciona uno o varios modulos{}", BOLD, RESET);
+        println!(
+            "  [{}] [1] Kitowall       Wallpapers estaticos",
+            if selection.kitowall { "x" } else { " " }
+        );
+        println!(
+            "  [{}] [2] Kilivepaper    Live wallpapers",
+            if selection.kilivepaper { "x" } else { " " }
+        );
+        println!(
+            "  [{}] [3] KiSDDM          Pantalla de inicio SDDM",
+            if selection.kisddm { "x" } else { " " }
+        );
+        println!(
+            "  {}[--] [4] Kitsune        Espectro de audio  [PROXIMAMENTE]{}",
+            DIM, RESET
+        );
+        println!();
+        println!("  {}[5]{} Continuar", FG_CYAN, RESET);
+        println!("  {}[0]{} Cancelar", FG_RED, RESET);
+        print!("  {}Opcion:{} ", BOLD, RESET);
+        let _ = io::stdout().flush();
+        match read_line().as_str() {
+            "1" => selection.kitowall = !selection.kitowall,
+            "2" => selection.kilivepaper = !selection.kilivepaper,
+            "3" => selection.kisddm = !selection.kisddm,
+            "4" => {
+                print_warn("Kitsune estara disponible proximamente.");
+                thread::sleep(Duration::from_secs(1));
+            }
+            "5" if selection.has_product() => return Some(selection),
+            "5" => {
+                print_warn("Selecciona al menos Kitowall, Kilivepaper o KiSDDM.");
+                thread::sleep(Duration::from_secs(2));
+            }
+            "0" => return None,
+            _ => {
+                print_warn("Opcion no valida.");
+                thread::sleep(Duration::from_secs(1));
+            }
+        }
+    }
+}
+
+fn install_kito_environment() {
+    clear_screen();
+    print_header("INSTALAR ENTORNO KITO");
+    let Some(environment) = confirm_or_override_environment(SystemEnvironment::detect()) else {
+        return;
+    };
+    if !environment.compatibility.supported {
+        print_err("La instalacion se bloqueo para evitar una configuracion incompatible.");
+        print_info(
+            "La deteccion manual corrige falsos positivos; no habilita soporte inexistente.",
+        );
+        return;
+    }
+    let Some(target) = environment.target() else {
+        print_err("No existe un target de release para esta arquitectura.");
+        return;
+    };
+    let Some(selection) = select_kito_modules() else {
+        return;
+    };
+    let plan = selection.plan();
+
+    clear_screen();
+    print_header("VERIFICANDO RELEASES DE KITO");
+    print_info("Consultando releases estables publicados en GitHub...");
+    let statuses = kito::resolve_releases(&plan, target);
+    println!();
+    for status in &statuses {
+        match &status.state {
+            ReleaseState::Available {
+                version,
+                tag,
+                manifest_url,
+                ..
+            } => {
+                print_ok(&format!(
+                    "{} {} ({})",
+                    status.component.label(),
+                    version,
+                    tag
+                ));
+                println!("      {}{}{}", DIM, manifest_url, RESET);
+            }
+            ReleaseState::Unavailable(reason) => {
+                print_err(&format!("{}: {}", status.component.label(), reason));
+            }
+        }
+    }
+
+    println!();
+    if !kito::all_available(&statuses) {
+        print_warn("No se modifico el sistema: faltan releases obligatorios.");
+        print_info("Publica los releases marcados como no disponibles y vuelve a intentarlo.");
+        return;
+    }
+
+    print_step("Descargando y validando manifiestos...");
+    let installation = match InstallationPlan::prepare(&statuses, target) {
+        Ok(installation) => installation,
+        Err(error) => {
+            print_err(&format!("No se pudo preparar la instalacion: {error}"));
+            return;
+        }
+    };
+    let packages = installation.required_arch_packages();
+    print_ok("Preflight completo: manifests, dependencias y artefactos son coherentes.");
+    println!();
+    println!("  {}Componentes:{}", BOLD, RESET);
+    for release in &installation.releases {
+        println!(
+            "    - {} {}",
+            release.component.label(),
+            release.manifest.product.version
+        );
+    }
+    println!("  {}Dependencias del sistema:{}", BOLD, RESET);
+    if packages.is_empty() {
+        println!("    - Ninguna adicional");
+    } else {
+        println!("    - {}", packages.join(", "));
+    }
+    println!();
+    print!("  {}Instalar este plan?{} [s/N]: ", FG_YELLOW, RESET);
+    let _ = io::stdout().flush();
+    if !matches!(read_line().to_ascii_lowercase().as_str(), "s" | "si") {
+        print_info("Instalacion cancelada sin modificar el sistema.");
+        return;
+    }
+
+    let paths = match InstallPaths::detect() {
+        Ok(paths) => paths,
+        Err(error) => {
+            print_err(&format!("No se pudieron resolver las rutas XDG: {error}"));
+            return;
+        }
+    };
+    print_step("Descargando y verificando todos los artefactos antes de modificar paquetes...");
+    if let Err(error) = installation.prefetch(&paths) {
+        print_err(&format!("No se pudieron preparar los artefactos: {error}"));
+        return;
+    }
+    if !instalar_paquetes(&packages) {
+        print_err("Se aborto antes de instalar los artefactos Kito.");
+        return;
+    }
+    print_step("Descargando, verificando e instalando artefactos Kito...");
+    match installation.install(&paths) {
+        Ok(state) => {
+            print_ok(&format!(
+                "Entorno Kito instalado: {} componentes activos.",
+                state.modules.len()
+            ));
+            println!(
+                "      {}Estado: {}{}",
+                DIM,
+                paths.state_file().display(),
+                RESET
+            );
+            println!(
+                "      {}Ejecuta KiUI con: {}/kiui{}",
+                DIM,
+                paths.bin_home.display(),
+                RESET
+            );
+        }
+        Err(error) => {
+            print_err(&format!("La instalacion no pudo completarse: {error}"));
+            print_info("Los releases versionados no activados pueden permanecer en cache.");
+        }
+    }
+}
+
+fn main() {
     loop {
         print_banner();
         print_menu();
@@ -1473,6 +1699,10 @@ fn main() {
         let option = read_line();
 
         match option.as_str() {
+            "k" | "K" => {
+                install_kito_environment();
+                press_enter_to_continue();
+            }
             "1" => {
                 install_zsh_starship();
                 press_enter_to_continue();

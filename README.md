@@ -69,6 +69,22 @@ cargo build --release
 
 ---
 
+### Entorno Kito
+
+La opción `K` inicia el instalador del entorno Kito. GekkoApp detecta la
+distribución, arquitectura, sesión gráfica, escritorio y gestor de servicios,
+permite corregir falsos positivos y resuelve los releases necesarios antes de
+modificar el sistema.
+
+La primera matriz soportada es Arch Linux `x86_64`, Wayland, Hyprland y servicios
+de usuario de systemd. KiUI y Kitsune Compositor son componentes obligatorios;
+Kitowall, Kilivepaper y KiSDDM se seleccionan como módulos independientes.
+Kitsune se muestra como próximamente y permanece deshabilitado hasta publicar su
+release.
+
+El diseño y estado de implementación se documentan en
+[`docs/entorno-kito.md`](docs/entorno-kito.md).
+
 ## 🛠️ Requisitos
 
 - **Arch Linux** o derivados.
