@@ -1304,26 +1304,52 @@ fn install_chaotic_aur() -> bool {
 }
 
 fn install_bauh() -> bool {
-    print_header("INSTALANDO TIENDA BAUH (AUR)");
-    if !instalar_paquetes(&["bauh"]) {
+    print_header("INSTALANDO TIENDA BAUH FORK (THE-GEKKO)");
+
+    if !instalar_paquetes(&["python-pipx", "git"]) {
+        print_err("No se pudieron instalar las dependencias base (python-pipx, git).");
         return false;
     }
 
-    print_info("Buscando archivo gems.py de bauh...");
-    let (ok, gems_path) = run_shell_piped(
-        "ls /usr/lib/python*/site-packages/bauh/view/core/gems.py 2>/dev/null | head -n 1",
-    );
-
-    let gems_path = gems_path.trim().to_string();
-    if !ok || gems_path.is_empty() {
-        print_warn("No se encontró el archivo gems.py de bauh. Omitiendo modificaciones.");
-        thread::sleep(Duration::from_secs(2));
-        return true;
+    if is_package_installed("bauh")
+        && confirm_action(
+            "¿Deseas desinstalar el bauh original de pacman para evitar conflictos con el fork?",
+        )
+        && !desinstalar_paquetes(&["bauh"])
+    {
+        print_warn("No se pudo desinstalar el paquete bauh oficial. Continuando...");
     }
 
-    print_info("No se parcheará gems.py directamente para evitar romper paquetes de pacman.");
-    print_info("Bauh ha sido instalado exitosamente.");
+    let local_fork_path = "/home/thegekko/Documentos/Proyecto Anti/Bauh Fork The-Gekko";
+    let repo_url = "https://github.com/The-Gekko/Bauh-Fork-The-Gekko.git";
 
+    let target_dir = if Path::new(local_fork_path).join("install.sh").exists() {
+        print_ok(&format!("Usando repositorio local: {}", local_fork_path));
+        local_fork_path.to_string()
+    } else {
+        print_info("Buscando o clonando repositorio remoto del fork de Bauh...");
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+        let clone_dir = format!("{}/.cache/gekkoapp/Bauh-Fork-The-Gekko", home);
+        let cache_base = format!("{}/.cache/gekkoapp", home);
+
+        let clone_cmd = format!(
+            "mkdir -p '{cache_base}' && if [ -d '{clone_dir}/.git' ]; then cd '{clone_dir}' && git pull; else git clone '{repo_url}' '{clone_dir}'; fi"
+        );
+        if !run_shell(&clone_cmd) {
+            print_err("Fallo al clonar/actualizar el repositorio Bauh-Fork-The-Gekko.");
+            return false;
+        }
+        clone_dir
+    };
+
+    print_info("Ejecutando script de instalación install.sh del fork de Bauh...");
+    let install_cmd = format!("cd '{target_dir}' && bash install.sh --yes");
+    if !run_shell(&install_cmd) {
+        print_err("Error durante la ejecución de install.sh de Bauh Fork.");
+        return false;
+    }
+
+    print_ok("¡Bauh Fork (The-Gekko) instalado correctamente!");
     thread::sleep(Duration::from_secs(2));
     true
 }

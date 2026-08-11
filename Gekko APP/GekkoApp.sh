@@ -121,9 +121,34 @@ install_chaotic_aur() {
 }
 
 install_bauh() {
-    print_header "INSTALANDO TIENDA BAUH (AUR)"
-    instalar_paquetes bauh
-    print_success "Instalación de Bauh finalizada."
+    print_header "INSTALANDO TIENDA BAUH FORK (THE-GEKKO)"
+    instalar_paquetes python-pipx git
+
+    if pacman -Qq bauh >/dev/null 2>&1; then
+        print_warning "Se detectó el paquete 'bauh' oficial instalado mediante pacman."
+        print_info "Desinstalando bauh original para evitar conflictos con el fork..."
+        sudo pacman -Rns --noconfirm bauh || print_warning "No se pudo desinstalar bauh de pacman. Continuando..."
+    fi
+
+    LOCAL_FORK="/home/thegekko/Documentos/Proyecto Anti/Bauh Fork The-Gekko"
+    REPO_URL="https://github.com/The-Gekko/Bauh-Fork-The-Gekko.git"
+
+    if [ -f "$LOCAL_FORK/install.sh" ]; then
+        print_success "Usando repositorio local: $LOCAL_FORK"
+        (cd "$LOCAL_FORK" && bash install.sh --yes)
+    else
+        print_info "Clonando repositorio remoto del fork de Bauh..."
+        CACHE_DIR="$HOME/.cache/gekkoapp/Bauh-Fork-The-Gekko"
+        mkdir -p "$HOME/.cache/gekkoapp"
+        if [ -d "$CACHE_DIR/.git" ]; then
+            (cd "$CACHE_DIR" && git pull)
+        else
+            git clone "$REPO_URL" "$CACHE_DIR"
+        fi
+        (cd "$CACHE_DIR" && bash install.sh --yes)
+    fi
+
+    print_success "¡Bauh Fork (The-Gekko) instalado correctamente!"
     sleep 2
 }
 
