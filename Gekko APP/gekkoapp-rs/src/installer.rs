@@ -139,8 +139,8 @@ pub struct PreparedRelease {
     pub manifest: ArtifactManifest,
 }
 
-/// Identidad verificable de un componente instalado via pipx.
-pub struct PipxIdentity<'a> {
+/// Identidad verificable de un componente instalado por el motor.
+pub struct ComponentIdentity<'a> {
     pub label: &'a str,
     pub product_id: &'a str,
     pub repository: &'a str,
@@ -152,7 +152,40 @@ impl PreparedRelease {
     /// Used by catalog components that are not Kito products (e.g. Bauh Fork),
     /// which install via `pipx` instead of the native symlink layout.
     pub fn prepare_pipx(
-        identity: PipxIdentity<'_>,
+        identity: ComponentIdentity<'_>,
+        tag: &str,
+        target: &str,
+        manifest_url: &str,
+        artifact_url: &str,
+        manifest: ArtifactManifest,
+    ) -> Result<Self, String> {
+        if manifest.install_method != "python_pipx" {
+            return Err(format!("{} no usa el metodo python_pipx", identity.label));
+        }
+        Self::prepare_verified(identity, tag, target, manifest_url, artifact_url, manifest)
+    }
+
+    /// Build a native symlink-layout release after validating the manifest
+    /// identity (e.g. the GekkoApp self-update with `binary_extract`).
+    pub fn prepare_native(
+        identity: ComponentIdentity<'_>,
+        tag: &str,
+        target: &str,
+        manifest_url: &str,
+        artifact_url: &str,
+        manifest: ArtifactManifest,
+    ) -> Result<Self, String> {
+        if manifest.install_method != "binary_extract" {
+            return Err(format!(
+                "{} no usa el metodo binary_extract",
+                identity.label
+            ));
+        }
+        Self::prepare_verified(identity, tag, target, manifest_url, artifact_url, manifest)
+    }
+
+    fn prepare_verified(
+        identity: ComponentIdentity<'_>,
         tag: &str,
         target: &str,
         manifest_url: &str,
@@ -323,8 +356,10 @@ impl InstallationPlan {
         Ok(Self { releases })
     }
 
-    /// Convenience plan for a single pipx-managed component (e.g. Bauh Fork).
-    pub fn pipx_single(release: PreparedRelease) -> Self {
+    /// Convenience plan for a single managed component (e.g. Bauh Fork o el
+    /// propio GekkoApp). La activacion se elige por `install_method` del
+    /// manifiesto (`python_pipx` vs layout nativo de symlinks).
+    pub fn single(release: PreparedRelease) -> Self {
         Self {
             releases: vec![release],
         }
@@ -442,6 +477,63 @@ fn ensure_destination_available(path: &Path, owned: &BTreeSet<&str>) -> Result<(
             "la activacion pisaria una ruta ajena: {}",
             path.display()
         ));
+    }
+    Ok(())
+}
+
+/// Adopta las rutas que un plan va a escribir y que todavia no estan
+/// registradas como propias en el estado (p. ej. los binarios e integracion
+/// previos de GekkoApp instalados con `scripts/install.sh`).
+///
+/// Solo debe usarse en el flujo de auto-actualizacion del propio GekkoApp,
+/// que deliberadamente reclama sus rutas legacy; nunca en componentes de
+/// terceros.
+pub(crate) fn adopt_release_destinations(
+    paths: &InstallPaths,
+    plan: &InstallationPlan,
+) -> Result<(), String> {
+    let state = load_state(&paths.state_file())?;
+    for release in &plan.releases {
+        let owned = state
+            .modules
+            .get(&release.manifest.product.id)
+            .map(|module| {
+                module
+                    .owned_paths
+                    .iter()
+                    .map(|path| path.path.as_str())
+                    .collect::<BTreeSet<_>>()
+            })
+            .unwrap_or_default();
+        let mut destinations = Vec::new();
+        for entrypoint in &release.manifest.entrypoints {
+            destinations.push(paths.bin_home.join(&entrypoint.name));
+        }
+        for desktop in &release.manifest.integrations.desktop_entries {
+            destinations.push(
+                paths
+                    .data_home
+                    .join("applications")
+                    .join(format!("{}.desktop", desktop.application_id)),
+            );
+            for icon in &desktop.icons {
+                destinations.push(
+                    paths
+                        .data_home
+                        .join("icons")
+                        .join(&icon.theme)
+                        .join(format!("{}x{}", icon.size, icon.size))
+                        .join("apps")
+                        .join(format!("{}.{}", desktop.application_id, icon.format)),
+                );
+            }
+        }
+        for destination in destinations {
+            let text = path_text(&destination)?;
+            if fs::symlink_metadata(&destination).is_ok() && !owned.contains(text.as_str()) {
+                let _ = fs::remove_file(&destination);
+            }
+        }
     }
     Ok(())
 }
@@ -705,9 +797,10 @@ fn activate_release(
     Ok(())
 }
 
-/// Activate a pipx-managed release: `pipx install --force` the verified source
-/// tree (extracted root), then materialize desktop integration and record the
-/// resulting launchers and files as owned.
+/// Activate a pipx-managed release: `pipx install` the verified source tree
+/// (extracted root), uninstalling any previous pipx-managed package whose bin
+/// launchers would block activation, then materialize desktop integration and
+/// record the resulting launchers and files as owned.
 fn activate_pipx_release(
     release: &PreparedRelease,
     root: &Path,
@@ -727,9 +820,32 @@ fn activate_pipx_release(
         })
         .unwrap_or_default();
 
+    // `pipx install --force` se niega a sobrescribir rutas bin que ya gestiona
+    // pipx ("la activacion pisaria una ruta ajena"). Si hay una instalacion
+    // pipx previa del paquete, se desinstala antes de reinstalar.
+    let primary_entrypoint = release
+        .manifest
+        .entrypoints
+        .first()
+        .map(|entrypoint| entrypoint.name.as_str())
+        .unwrap_or(product);
+    let launcher = paths.bin_home.join(primary_entrypoint);
+    if launcher.exists() {
+        let uninstall = Command::new("pipx")
+            .arg("uninstall")
+            .arg(primary_entrypoint)
+            .status()
+            .map_err(|error| format!("no se pudo ejecutar pipx: {error}"))?;
+        if !uninstall.success() {
+            return Err(format!(
+                "pipx no pudo desinstalar la instalacion previa de {}",
+                release.component_label
+            ));
+        }
+    }
+
     let pipx = Command::new("pipx")
         .arg("install")
-        .arg("--force")
         .arg(root)
         .status()
         .map_err(|error| format!("no se pudo ejecutar pipx: {error}"))?;
@@ -949,6 +1065,37 @@ fn write_state(path: &Path, state: &InstallationState) -> Result<(), String> {
     write_owned_file(path, &bytes, owned)
 }
 
+/// Registra un componente instalado desde codigo fuente (p. ej. Gekko ADB
+/// Studio) en el estado de GekkoApp sin pasar por un release firmado.
+pub(crate) fn record_source_module(
+    paths: &InstallPaths,
+    module_id: &str,
+    version: &str,
+    active_root: &str,
+    entrypoints: BTreeMap<String, String>,
+) -> Result<(), String> {
+    fs::create_dir_all(&paths.state_home).map_err(io_error("crear directorio de estado"))?;
+    let mut state = load_state(&paths.state_file())?;
+    state.modules.insert(
+        module_id.to_string(),
+        InstalledModule {
+            version: version.to_string(),
+            contract_version: "source".to_string(),
+            active_root: active_root.to_string(),
+            manifest_url: String::new(),
+            artifact_url: String::new(),
+            artifact_sha256: String::new(),
+            entrypoints,
+            owned_paths: Vec::new(),
+            activated_at_unix: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+        },
+    );
+    write_state(&paths.state_file(), &state)
+}
+
 fn validate_manifest(
     manifest: &ArtifactManifest,
     component_label: &str,
@@ -1107,7 +1254,7 @@ fn detect_glibc_version() -> Result<String, String> {
         .ok_or_else(|| format!("respuesta de glibc no reconocida: {}", stdout.trim()))
 }
 
-fn compare_versions(left: &str, right: &str) -> Result<std::cmp::Ordering, String> {
+pub(crate) fn compare_versions(left: &str, right: &str) -> Result<std::cmp::Ordering, String> {
     let left = parse_version(left)?;
     let right = parse_version(right)?;
     let length = left.len().max(right.len());

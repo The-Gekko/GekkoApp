@@ -1,11 +1,13 @@
 use crate::core::reporter::{Reporter, BOLD, DIM, FG_CYAN, FG_GREEN, FG_RED, FG_YELLOW, RESET};
 use crate::core::system::{
     check_arch_linux, configurar_fastfetch, desinstalar_paquetes, instalar_paquetes,
-    is_package_installed, print_detected_environment, run_shell,
+    is_package_installed, print_detected_environment, run_shell, run_shell_piped,
 };
 use crate::environment::SystemEnvironment;
 use crate::installer::{InstallPaths, InstallationPlan};
 use crate::kito::{ModuleSelection, ReleaseState};
+use std::collections::BTreeMap;
+use std::fs;
 use std::io::{self, Write};
 use std::path::Path;
 use std::thread;
@@ -361,7 +363,8 @@ pub fn install_gaming(reporter: &dyn Reporter, gpu: &str, vulkan_choice: &str) -
 ///
 /// El release se publica con un manifiesto firmado (SHA-256) que declara el
 /// metodo `python_pipx`: se verifica el artefacto fuente y se instala con
-/// `pipx install --force`. La GUI pasa `require_confirmation = false` porque
+/// pipx (desinstalando antes una instalacion pipx previa que bloquearia la
+/// activacion). La GUI pasa `require_confirmation = false` porque
 /// la confirmacion ya se solicito en su catalogo.
 pub fn install_bauh(
     reporter: &dyn Reporter,
@@ -420,6 +423,152 @@ pub fn install_bauh(
     );
     thread::sleep(Duration::from_secs(2));
     Ok(())
+}
+
+/// Instala o actualiza GekkoApp a si misma desde GitHub Releases.
+///
+/// Usa el mismo motor que el Bauh Fork: se resuelve el release mas reciente,
+/// se verifica el manifiesto firmado (SHA-256, contrato `kitotsu.release-artifact`
+/// 1.0) y se activa con el layout nativo de symlinks. Como GekkoApp se instalo
+/// antes con `scripts/install.sh` (archivos regulares sin registrar), se
+/// adoptan esas rutas legacy antes de activar para que el motor pueda
+/// gestionarlas. No requiere sudo: solo escribe en los XDG paths del usuario.
+pub fn install_gekkoapp(
+    reporter: &dyn Reporter,
+    environment: &SystemEnvironment,
+    require_confirmation: bool,
+) -> Result<(), String> {
+    reporter.header("INSTALANDO GEKKOAPP (THE-GEKKO)");
+
+    if require_confirmation
+        && !reporter.confirm("¿Deseas actualizar GekkoApp a la ultima version publicada?")
+    {
+        return Err("Actualizacion cancelada.".to_owned());
+    }
+
+    let target = environment
+        .target()
+        .ok_or_else(|| "No existe un target de release para esta arquitectura.".to_owned())?;
+
+    reporter.step("Verificando el release mas reciente de GekkoApp...");
+    let plan = crate::core::catalog::resolve_gekkoapp_plan(target)?;
+    reporter.ok(&format!(
+        "Release de GekkoApp {} encontrado y manifiesto verificado.",
+        plan.releases[0].manifest.product.version
+    ));
+
+    let paths = InstallPaths::detect()?;
+    reporter.step("Descargando y verificando el artefacto firmado...");
+    plan.prefetch(&paths)?;
+    reporter.step("Adoptando los binarios e integracion previos...");
+    crate::installer::adopt_release_destinations(&paths, &plan)?;
+    let _ = fs::remove_file(
+        paths
+            .data_home
+            .join("applications")
+            .join("gekkoapp-control-center.desktop"),
+    );
+    reporter.step("Actualizando GekkoApp...");
+    let state = plan.install(&paths)?;
+
+    let version = state
+        .modules
+        .get(crate::core::catalog::GEKKOAPP_PRODUCT_ID)
+        .map(|module| module.version.as_str())
+        .unwrap_or("desconocida");
+    reporter.ok(&format!("¡GekkoApp {version} actualizado correctamente!"));
+    reporter.warn("Reinicia GekkoApp para ejecutar la nueva version.");
+    thread::sleep(Duration::from_secs(2));
+    Ok(())
+}
+///
+/// El proyecto no publica releases firmados todavia, asi que se clona HEAD,
+/// se instalan las dependencias de sistema con pacman y se ejecuta su propio
+/// `install.sh --no-deps` (mismo instalador que usa el autor: copia la app a
+/// XDG, crea el launcher, el desktop entry, el icono y el metainfo). La
+/// revision instalada se registra en el estado de GekkoApp.
+pub fn install_gekko_adb(reporter: &dyn Reporter) -> Result<(), String> {
+    reporter.header("INSTALANDO GEKKO ADB STUDIO (THE-GEKKO)");
+
+    const DEPS: &[&str] = &[
+        "git",
+        "python",
+        "python-gobject",
+        "gtk3",
+        "gtk4",
+        "android-tools",
+        "scrcpy",
+        "glib2",
+        "xdg-utils",
+    ];
+    if !instalar_paquetes(reporter, DEPS) {
+        return Err("No se pudieron instalar las dependencias de Gekko ADB Studio.".to_owned());
+    }
+
+    let paths = InstallPaths::detect()?;
+    let source_dir = paths
+        .cache_home
+        .join(crate::core::catalog::GEKKO_ADB_PRODUCT_ID);
+    fs::create_dir_all(&source_dir)
+        .map_err(|error| format!("No se pudo preparar {}: {error}", source_dir.display()))?;
+    let quoted_dir = sh_quote(&source_dir);
+
+    reporter.step("Descargando el codigo fuente desde GitHub...");
+    let repo_url = format!(
+        "https://github.com/{}.git",
+        crate::core::catalog::GEKKO_ADB_REPOSITORY
+    );
+    if source_dir.join(".git").exists() {
+        if !run_shell(&format!(
+            "git -C {quoted_dir} fetch --depth 1 origin main && git -C {quoted_dir} reset --hard origin/main"
+        )) {
+            return Err("No se pudo actualizar el codigo fuente de Gekko ADB Studio.".to_owned());
+        }
+    } else if !run_shell(&format!("git clone --depth 1 {repo_url} {quoted_dir}")) {
+        return Err("No se pudo descargar el codigo fuente de Gekko ADB Studio.".to_owned());
+    }
+
+    let version = run_shell_piped(&format!("git -C {quoted_dir} rev-parse --short HEAD")).1;
+    let version = version.trim().to_string();
+    if version.is_empty() {
+        return Err("No se pudo determinar la revision de Gekko ADB Studio.".to_owned());
+    }
+
+    reporter.step("Ejecutando el instalador de Gekko ADB Studio...");
+    let installer = source_dir.join("install.sh");
+    if !run_shell(&format!("{} --no-deps --assume-yes", sh_quote(&installer))) {
+        return Err("El instalador de Gekko ADB Studio fallo.".to_owned());
+    }
+
+    let mut entrypoints = BTreeMap::new();
+    entrypoints.insert(
+        "gekko-adb".to_string(),
+        paths.bin_home.join("gekko-adb").display().to_string(),
+    );
+    crate::installer::record_source_module(
+        &paths,
+        crate::core::catalog::GEKKO_ADB_PRODUCT_ID,
+        &version,
+        &source_dir.display().to_string(),
+        entrypoints,
+    )?;
+
+    reporter.ok(&format!(
+        "¡Gekko ADB Studio {version} instalado correctamente!"
+    ));
+    println!(
+        "      {}Ejecuta la suite con: {}/gekko-adb{}",
+        DIM,
+        paths.bin_home.display(),
+        RESET
+    );
+    thread::sleep(Duration::from_secs(2));
+    Ok(())
+}
+
+/// Escapa una ruta para usarla como argumento unico de una shell.
+fn sh_quote(path: &Path) -> String {
+    format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
 }
 
 fn prompt_with_default(reporter: &dyn Reporter, label: &str, current: &str) -> String {

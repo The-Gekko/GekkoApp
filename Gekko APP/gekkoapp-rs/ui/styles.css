@@ -29,7 +29,7 @@ body {
   justify-content: space-between;
   padding: 14px 22px;
   border-bottom: 1px solid var(--border);
-  background: linear-gradient(180deg, #141926, #10131a);
+  background: linear-gradient(180deg, var(--panel-2), var(--panel));
 }
 
 .brand .logo {
@@ -46,6 +46,91 @@ body {
 .env {
   color: var(--muted);
   text-align: right;
+}
+
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.bell {
+  position: relative;
+}
+
+.bell-toggle {
+  background: transparent;
+  color: var(--muted);
+  padding: 4px 6px;
+  font-size: 17px;
+  border-radius: 8px;
+}
+
+.bell-toggle:hover:not(:disabled) {
+  background: var(--panel-2);
+  filter: none;
+}
+
+.bell-badge {
+  position: absolute;
+  top: -6px;
+  right: -8px;
+  min-width: 17px;
+  height: 17px;
+  border-radius: 999px;
+  background: var(--red);
+  color: #fff;
+  font-size: 11px;
+  line-height: 17px;
+  text-align: center;
+  padding: 0 4px;
+  font-weight: 700;
+}
+
+.hidden {
+  display: none !important;
+}
+
+.bell-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  min-width: 280px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 6px;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.update-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  background: transparent;
+  color: var(--text);
+  padding: 8px 10px;
+  text-align: left;
+  border-radius: 8px;
+}
+
+.update-item:hover {
+  background: var(--panel-2);
+}
+
+.update-name {
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.update-versions {
+  color: var(--yellow);
+  font-size: 12px;
 }
 
 .grid {
@@ -155,6 +240,41 @@ body {
   border-radius: 8px;
   padding: 10px 12px;
   font-family: inherit;
+}
+
+.actions input[type="password"]:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.gpu-select {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-family: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.gpu-select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.theme-swatches {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.theme-swatches .swatch {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  box-sizing: border-box;
 }
 
 .actions input[type="password"]:focus {

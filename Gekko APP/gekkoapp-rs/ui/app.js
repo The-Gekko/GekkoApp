@@ -90,11 +90,175 @@ function render() {
   } else {
     bauhStatus.replaceChildren(badge("no instalado", "error"));
   }
+
+  const gekkoAdb = catalog.items.find((i) => i.id === "gekko-adb");
+  const gekkoAdbStatus = $("gekko-adb-status");
+  if (gekkoAdb && gekkoAdb.installedVersion) {
+    gekkoAdbStatus.replaceChildren(badge(gekkoAdb.installedVersion, "installed"));
+  } else {
+    gekkoAdbStatus.replaceChildren(badge("no instalado", "error"));
+  }
+
+  const gekkoapp = catalog.items.find((i) => i.id === "gekkoapp");
+  const gekkoappStatus = $("gekkoapp-status");
+  if (gekkoapp && gekkoapp.installedVersion) {
+    gekkoappStatus.replaceChildren(badge(`v${gekkoapp.installedVersion}`, "installed"));
+  } else {
+    gekkoappStatus.replaceChildren(badge("no instalado", "error"));
+  }
 }
 
 function refreshButtons() {
   $("kito-install").disabled = $("kito-pass").value.trim() === "";
   $("bauh-install").disabled = $("bauh-pass").value.trim() === "";
+  $("gekko-adb-install").disabled = $("gekko-adb-pass").value.trim() === "";
+  $("terminal-install").disabled = $("terminal-pass").value.trim() === "";
+  $("hyprland-install").disabled = $("hyprland-pass").value.trim() === "";
+  $("niri-install").disabled = $("niri-pass").value.trim() === "";
+  $("gaming-install").disabled = $("gaming-pass").value.trim() === "";
+  $("chaotic-install").disabled = $("chaotic-pass").value.trim() === "";
+}
+
+// ── Campana de actualizaciones ───────────────────────────────────────────────
+
+let updates = [];
+const bellMenu = $("bell-menu");
+const bellBadge = $("bell-badge");
+
+function cardFor(id) {
+  if (["kitsune-compositor", "kiui", "kitowall", "kilivepaper", "kisddm"].includes(id)) {
+    return $("kito-card");
+  }
+  if (id === "bauh-fork-the-gekko") return $("bauh-card");
+  if (id === "gekkoapp") return $("gekkoapp-card");
+  return null;
+}
+
+function renderBell() {
+  const pending = updates.filter((u) => u.updateAvailable);
+  bellBadge.textContent = pending.length;
+  bellBadge.classList.toggle("hidden", pending.length === 0);
+  bellMenu.replaceChildren();
+  if (pending.length === 0) {
+    const none = document.createElement("div");
+    none.className = "update-item muted";
+    none.textContent = "Todo actualizado";
+    bellMenu.appendChild(none);
+    return;
+  }
+  for (const u of pending) {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = "update-item";
+    const name = document.createElement("span");
+    name.className = "update-name";
+    name.textContent = u.label;
+    const versions = document.createElement("span");
+    versions.className = "update-versions";
+    versions.textContent = `${u.installed || "—"} → ${u.latest}`;
+    item.appendChild(name);
+    item.appendChild(versions);
+    item.addEventListener("click", () => {
+      bellMenu.classList.add("hidden");
+      const card = cardFor(u.id);
+      if (card) card.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+    bellMenu.appendChild(item);
+  }
+}
+
+async function refreshUpdates() {
+  try {
+    updates = await invoke("check_updates");
+  } catch {
+    updates = [];
+  }
+  renderBell();
+}
+
+function mixHex(a, b, t) {
+  const pa = parseInt(a.slice(1), 16);
+  const pb = parseInt(b.slice(1), 16);
+  const r = Math.round(((pa >> 16) & 255) * (1 - t) + ((pb >> 16) & 255) * t);
+  const g = Math.round(((pa >> 8) & 255) * (1 - t) + ((pb >> 8) & 255) * t);
+  const bl = Math.round((pa & 255) * (1 - t) + (pb & 255) * t);
+  return "#" + ((1 << 24) | (r << 16) | (g << 8) | bl).toString(16).slice(1);
+}
+
+function paletteColor(p, name, fallback) {
+  return (p && p.colors && p.colors[name]) || fallback;
+}
+
+function renderThemeStatus(p) {
+  const status = $("theme-status");
+  const desc = $("theme-desc");
+  const swatches = $("theme-swatches");
+  if (p && p.available) {
+    status.replaceChildren(badge(p.dark ? "matugen · oscuro" : "matugen · claro", "installed"));
+    desc.textContent = `Siguiendo la paleta: ${p.source}`;
+    const keys = [
+      ["window_bg_color", "fondo"],
+      ["card_bg_color", "tarjeta"],
+      ["accent_color", "acento"],
+      ["window_fg_color", "texto"],
+    ];
+    const chips = keys.map(([key, label]) => {
+      const chip = document.createElement("span");
+      chip.className = "swatch";
+      chip.style.background = paletteColor(p, key, "#888");
+      chip.title = `${label} · ${paletteColor(p, key, "")}`;
+      return chip;
+    });
+    swatches.replaceChildren(...chips);
+  } else {
+    status.replaceChildren(badge("tema por defecto", ""));
+    desc.textContent =
+      "Sin paleta de matugen: GekkoApp usa el tema oscuro por defecto. Cambia el wallpaper con tu setup de HyDE/QuickShell para re-generar la paleta.";
+    swatches.replaceChildren();
+  }
+}
+
+function applyPalette(p) {
+  const root = document.documentElement.style;
+  const fallback = {
+    bg: "#0f1115",
+    fg: "#e6e9f0",
+    panel: "#161a22",
+    panel2: "#1c2230",
+    muted: "#8b93a7",
+    accent: "#5f8bff",
+    red: "#f0676b",
+  };
+  if (!p || !p.available) {
+    for (const key of ["--bg", "--panel", "--panel-2", "--border", "--text", "--muted", "--accent", "--red"]) {
+      root.removeProperty(key);
+    }
+    document.documentElement.dataset.theme = "dark";
+    renderThemeStatus(null);
+    return;
+  }
+  const bg = paletteColor(p, "window_bg_color", paletteColor(p, "theme_bg_color", fallback.bg));
+  const fg = paletteColor(p, "window_fg_color", paletteColor(p, "theme_fg_color", fallback.fg));
+  const panel = paletteColor(p, "card_bg_color", paletteColor(p, "sidebar_bg_color", fallback.panel));
+  const panel2 = paletteColor(p, "popover_bg_color", paletteColor(p, "view_bg_color", fallback.panel2));
+  const muted = paletteColor(p, "sidebar_fg_color", fallback.muted);
+  const accent = paletteColor(p, "accent_color", paletteColor(p, "accent_bg_color", fallback.accent));
+  const red = paletteColor(p, "destructive_color", fallback.red);
+  root.setProperty("--bg", bg);
+  root.setProperty("--panel", panel);
+  root.setProperty("--panel-2", panel2);
+  root.setProperty("--border", mixHex(panel, fg, 0.18));
+  root.setProperty("--text", fg);
+  root.setProperty("--muted", muted);
+  root.setProperty("--accent", accent);
+  root.setProperty("--red", red);
+  document.documentElement.dataset.theme = p.dark ? "dark" : "light";
+  renderThemeStatus(p);
+}
+
+async function loadTheme() {
+  const palette = await invoke("theme_state");
+  applyPalette(palette);
 }
 
 async function runInstall(command, args) {
@@ -118,6 +282,7 @@ async function runInstall(command, args) {
     setProgress("Completado", 100);
     catalog = await invoke("catalog_state");
     render();
+    refreshUpdates();
     return result;
   } catch (error) {
     appendLog("err", String(error));
@@ -129,9 +294,18 @@ async function runInstall(command, args) {
 async function init() {
   catalog = await invoke("catalog_state");
   render();
+  await loadTheme();
 
   $("kito-pass").addEventListener("input", refreshButtons);
   $("bauh-pass").addEventListener("input", refreshButtons);
+  $("gekko-adb-pass").addEventListener("input", refreshButtons);
+  $("terminal-pass").addEventListener("input", refreshButtons);
+  $("hyprland-pass").addEventListener("input", refreshButtons);
+  $("niri-pass").addEventListener("input", refreshButtons);
+  $("gaming-pass").addEventListener("input", refreshButtons);
+  $("chaotic-pass").addEventListener("input", refreshButtons);
+
+  listen("theme://changed", (event) => applyPalette(event.payload));
 
   $("kito-install").addEventListener("click", () => {
     const selection = {
@@ -145,6 +319,48 @@ async function init() {
   $("bauh-install").addEventListener("click", () => {
     runInstall("install_bauh", { password: $("bauh-pass").value });
   });
+
+  $("gekko-adb-install").addEventListener("click", () => {
+    runInstall("install_gekko_adb", { password: $("gekko-adb-pass").value });
+  });
+
+  $("gekkoapp-install").addEventListener("click", () => {
+    runInstall("install_gekkoapp", {});
+  });
+
+  $("terminal-install").addEventListener("click", () => {
+    runInstall("install_terminal", { password: $("terminal-pass").value });
+  });
+
+  $("hyprland-install").addEventListener("click", () => {
+    runInstall("install_hyprland", { password: $("hyprland-pass").value });
+  });
+
+  $("niri-install").addEventListener("click", () => {
+    runInstall("install_niri", { password: $("niri-pass").value });
+  });
+
+  $("gaming-install").addEventListener("click", () => {
+    runInstall("install_gaming_setup", {
+      gpu: $("gaming-gpu").value,
+      password: $("gaming-pass").value,
+    });
+  });
+
+  $("chaotic-install").addEventListener("click", () => {
+    runInstall("install_chaotic_aur", { password: $("chaotic-pass").value });
+  });
+
+  $("bell-toggle").addEventListener("click", (event) => {
+    event.stopPropagation();
+    bellMenu.classList.toggle("hidden");
+  });
+  document.addEventListener("click", () => bellMenu.classList.add("hidden"));
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") bellMenu.classList.add("hidden");
+  });
+
+  refreshUpdates();
 }
 
 init().catch((error) => {

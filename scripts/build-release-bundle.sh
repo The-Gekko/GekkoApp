@@ -44,11 +44,13 @@ install -m 0755 "$CRATE_DIR/target/release/gekkoapp-gui" "$STAGE/$ROOT/bin/gekko
 install -m 0755 "$ROOT_DIR/GekkoApp.sh" "$STAGE/$ROOT/gekkoapp.sh"
 install -m 0644 "$ROOT_DIR/packaging/gekkoapp-control-center.desktop" "$STAGE/$ROOT/gekkoapp-control-center.desktop"
 install -m 0644 "$CRATE_DIR/icons/icon.png" "$STAGE/$ROOT/$APP_ID.png"
+install -m 0644 "$CRATE_DIR/icons/org.thegekko.gekkoapp-symbolic.svg" "$STAGE/$ROOT/$APP_ID-symbolic.svg"
 install -m 0644 "$ROOT_DIR/README.md" "$STAGE/$ROOT/README.md"
 install -m 0644 "$ROOT_DIR/LICENSE" "$STAGE/$ROOT/LICENSE"
 
-# Tokeniza el Exec de la entrada .desktop para que el usuario pueda reemplazarlo.
-sed -i "s|^Exec=.*|Exec=/usr/bin/gekkoapp-gui|" "$STAGE/$ROOT/gekkoapp-control-center.desktop"
+# Tokeniza el Exec para que el motor de instalacion (activacion nativa de
+# GekkoApp) materialice la ruta real del launcher al instalar.
+sed -i "s|^Exec=.*|Exec=@EXECUTABLE@|" "$STAGE/$ROOT/gekkoapp-control-center.desktop"
 
 ARCHIVE="$PRODUCT_ID-$VERSION.tar.zst"
 tar --zstd -C "$STAGE" -cf "$DIST_DIR/$ARCHIVE" "$ROOT"
@@ -81,7 +83,9 @@ for dirpath, dirnames, filenames in os.walk(tree):
         elif rel == "LICENSE":
             kind = "license"
         elif rel.endswith(".desktop"):
-            kind = "desktop-entry"
+            kind = "desktop-entry-template"
+        elif rel.endswith("-symbolic.svg"):
+            kind = "icon"
         elif rel.endswith(".png"):
             kind = "icon"
         else:
@@ -125,7 +129,7 @@ manifest = {
                 "entrypoint": "gekkoapp-gui",
                 "icons": [
                     {"source": "%s.png" % app_id, "theme": "hicolor", "size": 512, "format": "png"}
-                ],
+                ]
             }
         ]
     },
@@ -138,9 +142,13 @@ print("payload_files=%d" % len(payload))
 PYEOF
 rm -rf "$EXTRACT"
 
+# El resolver de GekkoApp busca el asset con el nombre <producto>-<target>.manifest.json.
+cp "$DIST_DIR/$PRODUCT_ID-$VERSION.manifest.json" "$DIST_DIR/$PRODUCT_ID-$TARGET.manifest.json"
+
 echo "==> Listo"
 echo "  Artefacto:  $DIST_DIR/$ARCHIVE"
 echo "  SHA256:     $DIST_DIR/$PRODUCT_ID-$VERSION.sha256"
 echo "  Manifest:   $DIST_DIR/$PRODUCT_ID-$VERSION.manifest.json"
+echo "  Manifest:   $DIST_DIR/$PRODUCT_ID-$TARGET.manifest.json (para el resolver)"
 echo
-echo "Para publicar: gh release create '$TAG' '$DIST_DIR/$ARCHIVE' '$DIST_DIR/$PRODUCT_ID-$VERSION.sha256' '$DIST_DIR/$PRODUCT_ID-$VERSION.manifest.json' --repo '$REPOSITORY' --title 'GekkoApp $VERSION'"
+echo "Para publicar: gh release create '$TAG' '$DIST_DIR/$ARCHIVE' '$DIST_DIR/$PRODUCT_ID-$VERSION.sha256' '$DIST_DIR/$PRODUCT_ID-$TARGET.manifest.json' --repo '$REPOSITORY' --title 'GekkoApp $VERSION'"

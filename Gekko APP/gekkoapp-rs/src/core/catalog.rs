@@ -1,6 +1,6 @@
 use crate::core::github;
 use crate::installer::{
-    ensure_https, ArtifactManifest, InstallationPlan, PipxIdentity, PreparedRelease,
+    ensure_https, ArtifactManifest, ComponentIdentity, InstallationPlan, PreparedRelease,
 };
 use crate::kito::ComponentId;
 
@@ -8,11 +8,21 @@ pub const BAUH_PRODUCT_ID: &str = "bauh-fork-the-gekko";
 pub const BAUH_REPOSITORY: &str = "The-Gekko/Bauh-Fork-The-Gekko";
 pub const BAUH_LABEL: &str = "Bauh Fork (The-Gekko)";
 
+pub const GEKKO_ADB_PRODUCT_ID: &str = "gekko-adb";
+pub const GEKKO_ADB_REPOSITORY: &str = "The-Gekko/gekko-adb";
+pub const GEKKO_ADB_LABEL: &str = "Gekko ADB Studio";
+
+pub const GEKKOAPP_PRODUCT_ID: &str = "gekkoapp";
+pub const GEKKOAPP_REPOSITORY: &str = "The-Gekko/GekkoApp";
+pub const GEKKOAPP_LABEL: &str = "GekkoApp (Control Center)";
+
 /// Identidad de un componente gestionable desde el catalogo de GekkoApp.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CatalogComponent {
     Kito(ComponentId),
     BauhFork,
+    GekkoAdb,
+    GekkoApp,
 }
 
 impl CatalogComponent {
@@ -20,6 +30,8 @@ impl CatalogComponent {
         match self {
             Self::Kito(component) => component.product_id(),
             Self::BauhFork => BAUH_PRODUCT_ID,
+            Self::GekkoAdb => GEKKO_ADB_PRODUCT_ID,
+            Self::GekkoApp => GEKKOAPP_PRODUCT_ID,
         }
     }
 
@@ -27,6 +39,8 @@ impl CatalogComponent {
         match self {
             Self::Kito(component) => component.label(),
             Self::BauhFork => BAUH_LABEL,
+            Self::GekkoAdb => GEKKO_ADB_LABEL,
+            Self::GekkoApp => GEKKOAPP_LABEL,
         }
     }
 
@@ -34,6 +48,8 @@ impl CatalogComponent {
         match self {
             Self::Kito(component) => component.repository(),
             Self::BauhFork => BAUH_REPOSITORY,
+            Self::GekkoAdb => GEKKO_ADB_REPOSITORY,
+            Self::GekkoApp => GEKKOAPP_REPOSITORY,
         }
     }
 }
@@ -47,6 +63,8 @@ pub fn all_components() -> Vec<CatalogComponent> {
         CatalogComponent::Kito(ComponentId::Kilivepaper),
         CatalogComponent::Kito(ComponentId::Kisddm),
         CatalogComponent::BauhFork,
+        CatalogComponent::GekkoAdb,
+        CatalogComponent::GekkoApp,
     ]
     .to_vec()
 }
@@ -62,11 +80,6 @@ pub fn resolve_bauh_plan(target: &str) -> Result<InstallationPlan, String> {
     let bytes = github::download_manifest_body(&manifest_url)?;
     let manifest: ArtifactManifest = serde_json::from_slice(&bytes)
         .map_err(|error| format!("manifiesto de {BAUH_LABEL} invalido: {error}"))?;
-    if manifest.install_method != "python_pipx" {
-        return Err(format!(
-            "el release de {BAUH_LABEL} no usa el metodo python_pipx"
-        ));
-    }
     let artifact_url = asset_urls
         .get(&manifest.artifact.file_name)
         .ok_or_else(|| {
@@ -76,7 +89,7 @@ pub fn resolve_bauh_plan(target: &str) -> Result<InstallationPlan, String> {
             )
         })?;
     let release = PreparedRelease::prepare_pipx(
-        PipxIdentity {
+        ComponentIdentity {
             label: BAUH_LABEL,
             product_id: BAUH_PRODUCT_ID,
             repository: BAUH_REPOSITORY,
@@ -87,7 +100,42 @@ pub fn resolve_bauh_plan(target: &str) -> Result<InstallationPlan, String> {
         artifact_url,
         manifest,
     )?;
-    Ok(InstallationPlan::pipx_single(release))
+    Ok(InstallationPlan::single(release))
+}
+
+/// Resuelve, valida y prepara el plan de auto-actualizacion de GekkoApp.
+///
+/// Usa el mismo motor que el Bauh Fork, pero con `install_method:
+/// "binary_extract"`: el artefacto es un tarball con los binarios y la
+/// integracion de escritorio que se activa con el layout nativo de symlinks.
+pub fn resolve_gekkoapp_plan(target: &str) -> Result<InstallationPlan, String> {
+    let (tag, manifest_url, asset_urls) =
+        github::resolve_latest_release(GEKKOAPP_REPOSITORY, target)?;
+    ensure_https(&manifest_url)?;
+    let bytes = github::download_manifest_body(&manifest_url)?;
+    let manifest: ArtifactManifest = serde_json::from_slice(&bytes)
+        .map_err(|error| format!("manifiesto de {GEKKOAPP_LABEL} invalido: {error}"))?;
+    let artifact_url = asset_urls
+        .get(&manifest.artifact.file_name)
+        .ok_or_else(|| {
+            format!(
+                "el release de {GEKKOAPP_LABEL} no incluye el artefacto {}",
+                manifest.artifact.file_name
+            )
+        })?;
+    let release = PreparedRelease::prepare_native(
+        ComponentIdentity {
+            label: GEKKOAPP_LABEL,
+            product_id: GEKKOAPP_PRODUCT_ID,
+            repository: GEKKOAPP_REPOSITORY,
+        },
+        &tag,
+        target,
+        &manifest_url,
+        artifact_url,
+        manifest,
+    )?;
+    Ok(InstallationPlan::single(release))
 }
 
 #[cfg(test)]

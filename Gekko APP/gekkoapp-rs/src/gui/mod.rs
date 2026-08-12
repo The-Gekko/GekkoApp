@@ -1,8 +1,11 @@
 //! Interfaz de escritorio Tauri v2 (Control Center).
 //!
-//! Expone el catalogo y la instalacion de componentes (Kito y Bauh Fork) al
-//! frontend `ui/` a traves de comandos. El progreso de los flujos se emite
-//! como eventos `install://event` mediante un [`GuiReporter`].
+//! Expone el catalogo y la instalacion de componentes (Kito, Bauh Fork, Gekko
+//! ADB Studio, GekkoApp) y de los modulos del post-install (Terminal, Hyprland,
+//! Niri, Gaming, Chaotic AUR) al frontend `ui/` a traves de comandos. El
+//! progreso de los flujos se emite como eventos `install://event` mediante un
+//! [`GuiReporter`]. El comando `check_updates` alimenta la campana de
+//! actualizaciones del Control Center.
 //!
 //! Elevacion de privilegios: la GUI no tiene TTY, asi que la contrasena de
 //! sudo se entrega a un helper `askpass` temporal (`SUDO_ASKPASS` +
@@ -164,6 +167,23 @@ fn installed_versions() -> BTreeMap<String, String> {
         .collect()
 }
 
+/// Version instalada de un componente del catalogo.
+///
+/// GekkoApp todavia puede estar instalada por `scripts/install.sh` (sin
+/// registro en el estado del motor), asi que se reporta la version del binario
+/// en ejecucion como version instalada.
+fn installed_version_of(
+    installed: &BTreeMap<String, String>,
+    component: CatalogComponent,
+) -> Option<String> {
+    if component.id() == crate::core::catalog::GEKKOAPP_PRODUCT_ID
+        && !installed.contains_key(crate::core::catalog::GEKKOAPP_PRODUCT_ID)
+    {
+        return Some(env!("CARGO_PKG_VERSION").to_string());
+    }
+    installed.get(component.id()).cloned()
+}
+
 #[tauri::command]
 fn catalog_state() -> CatalogView {
     let environment = SystemEnvironment::detect();
@@ -175,7 +195,7 @@ fn catalog_state() -> CatalogView {
             id: component.id(),
             label: component.label(),
             repository: component.repository(),
-            installed_version: installed.get(component.id()).cloned(),
+            installed_version: installed_version_of(&installed, component),
         })
         .collect();
 
@@ -188,7 +208,9 @@ fn catalog_state() -> CatalogView {
                 mandatory: matches!(component, ComponentId::Compositor | ComponentId::Kiui),
                 installed_version: installed.get(component.product_id()).cloned(),
             }),
-            CatalogComponent::BauhFork => None,
+            CatalogComponent::BauhFork
+            | CatalogComponent::GekkoAdb
+            | CatalogComponent::GekkoApp => None,
         })
         .collect();
 
@@ -203,6 +225,61 @@ fn catalog_state() -> CatalogView {
         items,
         kito_modules,
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Comprobacion de actualizaciones (campana del Control Center)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateInfo {
+    id: &'static str,
+    label: &'static str,
+    installed: Option<String>,
+    latest: Option<String>,
+    update_available: bool,
+}
+
+/// Consulta la ultima version publicada de cada componente del catalogo con
+/// releases firmados (Kito, Bauh Fork y el propio GekkoApp; Gekko ADB Studio
+/// no publica releases todavia) y la compara con la instalada localmente.
+#[tauri::command]
+async fn check_updates() -> Result<Vec<UpdateInfo>, String> {
+    let environment = SystemEnvironment::detect();
+    let Some(target) = environment.target() else {
+        return Ok(Vec::new());
+    };
+    let installed = installed_versions();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut updates = Vec::new();
+        for component in all_components() {
+            if matches!(component, CatalogComponent::GekkoAdb) {
+                continue;
+            }
+            let installed_version = installed_version_of(&installed, component);
+            let latest =
+                crate::core::github::resolve_latest_release(component.repository(), target)
+                    .ok()
+                    .map(|(tag, _, _)| tag.trim_start_matches('v').to_string());
+            let update_available = match (&installed_version, &latest) {
+                (Some(current), Some(newer)) => crate::installer::compare_versions(newer, current)
+                    .map(|ordering| ordering == std::cmp::Ordering::Greater)
+                    .unwrap_or(false),
+                _ => false,
+            };
+            updates.push(UpdateInfo {
+                id: component.id(),
+                label: component.label(),
+                installed: installed_version,
+                latest,
+                update_available,
+            });
+        }
+        Ok(updates)
+    })
+    .await
+    .map_err(|error| format!("La comprobacion de actualizaciones aborto: {error}"))?
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -309,12 +386,155 @@ async fn install_bauh(app: AppHandle, password: Option<String>) -> Result<(), St
     .map_err(|error| format!("La tarea de instalacion aborto: {error}"))?
 }
 
+#[tauri::command]
+async fn install_gekko_adb(app: AppHandle, password: Option<String>) -> Result<(), String> {
+    run_gui_install(app, password, |reporter| {
+        crate::core::flow::install_gekko_adb(reporter)
+    })
+    .await
+}
+
+/// Ejecuta un flujo de instalacion en un hilo bloqueante con askpass sudo.
+async fn spawn_gui_install<T, F>(
+    app: AppHandle,
+    password: Option<String>,
+    f: F,
+) -> Result<T, String>
+where
+    F: FnOnce(&dyn Reporter) -> Result<T, String> + Send + 'static,
+    T: Send + 'static,
+{
+    let password = require_password(password)?;
+    let reporter = GuiReporter { app };
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = AskpassGuard::setup(&password)?;
+        f(&reporter)
+    })
+    .await
+    .map_err(|error| format!("La tarea de instalacion aborto: {error}"))?
+}
+
+async fn run_gui_install<F>(app: AppHandle, password: Option<String>, f: F) -> Result<(), String>
+where
+    F: FnOnce(&dyn Reporter) -> Result<(), String> + Send + 'static,
+{
+    spawn_gui_install(app, password, f).await
+}
+
+#[tauri::command]
+async fn install_terminal(app: AppHandle, password: Option<String>) -> Result<(), String> {
+    run_gui_install(app, password, |reporter| {
+        if crate::core::flow::install_zsh_starship(reporter) {
+            Ok(())
+        } else {
+            Err("La instalacion de Terminal Bonita fallo.".to_string())
+        }
+    })
+    .await
+}
+
+#[tauri::command]
+async fn install_hyprland(app: AppHandle, password: Option<String>) -> Result<(), String> {
+    run_gui_install(app, password, |reporter| {
+        if crate::core::flow::install_hyprland(reporter) {
+            Ok(())
+        } else {
+            Err("La instalacion del entorno Hyprland fallo.".to_string())
+        }
+    })
+    .await
+}
+
+#[tauri::command]
+async fn install_niri(app: AppHandle, password: Option<String>) -> Result<(), String> {
+    run_gui_install(app, password, |reporter| {
+        if crate::core::flow::install_niri(reporter) {
+            Ok(())
+        } else {
+            Err("La instalacion del entorno Niri fallo.".to_string())
+        }
+    })
+    .await
+}
+
+#[tauri::command]
+async fn install_gaming_setup(
+    app: AppHandle,
+    gpu: String,
+    password: Option<String>,
+) -> Result<(), String> {
+    let vulkan_choice = match gpu.as_str() {
+        "nvidia" => "1",
+        "intel" => "7",
+        "amd" => "12",
+        _ => return Err(format!("GPU no soportada: {gpu}")),
+    };
+    run_gui_install(app, password, move |reporter| {
+        if crate::core::flow::install_gaming(reporter, &gpu, vulkan_choice) {
+            Ok(())
+        } else {
+            Err("La instalacion de Gaming fallo.".to_string())
+        }
+    })
+    .await
+}
+
+#[tauri::command]
+async fn install_chaotic_aur(app: AppHandle, password: Option<String>) -> Result<(), String> {
+    run_gui_install(app, password, |reporter| {
+        if crate::core::pacman::install_chaotic_aur(reporter) {
+            Ok(())
+        } else {
+            Err("No se pudo configurar Chaotic AUR.".to_string())
+        }
+    })
+    .await
+}
+
+#[tauri::command]
+async fn install_gekkoapp(app: AppHandle) -> Result<(), String> {
+    let environment = SystemEnvironment::detect();
+    let reporter = GuiReporter { app };
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::core::flow::install_gekkoapp(&reporter, &environment, false)
+    })
+    .await
+    .map_err(|error| format!("La tarea de actualizacion aborto: {error}"))?
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Theme (integracion con Matugen / Material You)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[tauri::command]
+fn theme_state() -> crate::core::theme::MatugenPalette {
+    crate::core::theme::detect_palette()
+}
+
 pub fn run() {
     tauri::Builder::default()
+        .setup(|app| {
+            let handle = app.handle().clone();
+            std::thread::spawn(move || {
+                crate::core::theme::watch_palette(move |palette| {
+                    let _ = handle.emit("theme://changed", palette);
+                });
+            });
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             catalog_state,
+            check_updates,
             install_kito,
-            install_bauh
+            install_bauh,
+            install_gekko_adb,
+            install_gekkoapp,
+            install_terminal,
+            install_hyprland,
+            install_niri,
+            install_gaming_setup,
+            install_chaotic_aur,
+            theme_state
         ])
         .run(tauri::generate_context!())
         .expect("error al ejecutar la interfaz GekkoApp");
@@ -328,7 +548,7 @@ mod tests {
     fn catalog_state_reports_all_components() {
         let view = catalog_state();
 
-        assert_eq!(view.items.len(), 6);
+        assert_eq!(view.items.len(), 8);
         assert!(view
             .items
             .iter()
@@ -337,6 +557,12 @@ mod tests {
             .items
             .iter()
             .any(|item| item.id == "bauh-fork-the-gekko"));
+        assert!(view.items.iter().any(|item| item.id == "gekko-adb"));
+        assert!(view.items.iter().any(|item| item.id == "gekkoapp"));
+        assert!(view
+            .items
+            .iter()
+            .any(|item| item.id == "gekkoapp" && item.installed_version.is_some()));
         assert_eq!(view.kito_modules.len(), 5);
         assert!(view.kito_modules.iter().any(|module| module.mandatory));
     }

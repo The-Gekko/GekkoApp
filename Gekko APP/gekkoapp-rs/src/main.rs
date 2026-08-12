@@ -1,13 +1,11 @@
 #![allow(dead_code, clippy::print_literal)]
 
 use gekkoapp::core::flow::{
-    install_bauh, install_gaming, install_hyprland, install_kito_environment, install_niri,
-    install_zsh_starship,
+    install_bauh, install_gaming, install_gekko_adb, install_gekkoapp, install_hyprland,
+    install_kito_environment, install_niri, install_zsh_starship,
 };
 use gekkoapp::core::pacman::install_chaotic_aur;
-use gekkoapp::core::reporter::{
-    BOLD, DIM, FG_CYAN, FG_GREEN, FG_MAGENTA, FG_RED, FG_WHITE, FG_YELLOW, RESET,
-};
+use gekkoapp::core::reporter::{BOLD, DIM, FG_CYAN, FG_GREEN, FG_MAGENTA, FG_RED, FG_WHITE, RESET};
 use gekkoapp::core::{CliReporter, Reporter};
 use gekkoapp::environment::SystemEnvironment;
 use std::io::{self, BufRead, Write};
@@ -183,10 +181,16 @@ fn print_menu() {
             badge: None,
         },
         MenuItem {
-            key: "9",
-            icon: "✨",
-            label: "Instalar TODO",
-            badge: Some(("Terminal+Hyprland+Niri+Bauh", FG_YELLOW)),
+            key: "b",
+            icon: "📱",
+            label: "Gekko ADB Studio         (Control ADB GTK)",
+            badge: Some(("NUEVO", FG_MAGENTA)),
+        },
+        MenuItem {
+            key: "u",
+            icon: "🔄",
+            label: "Actualizar GekkoApp        (Auto-update)",
+            badge: Some(("NUEVO", FG_MAGENTA)),
         },
         MenuItem {
             key: "0",
@@ -272,68 +276,18 @@ fn main() {
                 }
                 press_enter_to_continue(&reporter);
             }
-            "9" => {
-                if !reporter.confirm("¿Deseas iniciar la instalación completa del entorno?") {
-                    continue;
+            "b" | "B" => {
+                match install_gekko_adb(&reporter) {
+                    Ok(()) => {}
+                    Err(error) => reporter.err(&format!("Gekko ADB Studio no se instalo: {error}")),
                 }
-
-                let eleccion_global;
-                loop {
-                    println!();
-                    println!("¿Qué entorno gráfico deseas instalar?");
-                    println!("1) Hyprland");
-                    println!("2) Niri");
-                    println!("3) Cancelar operación global");
-                    print!("Elige (1/2/3): ");
-                    let _ = io::stdout().flush();
-                    let eleccion = read_line();
-
-                    if eleccion == "1" || eleccion == "2" {
-                        eleccion_global = eleccion;
-                        break;
-                    } else if eleccion == "3" {
-                        eleccion_global = eleccion;
-                        reporter.warn("Operación cancelada por el usuario.");
-                        break;
-                    } else {
-                        reporter.warn("Opción no válida. Por favor, elige 1, 2 o 3.");
-                    }
+                press_enter_to_continue(&reporter);
+            }
+            "u" | "U" => {
+                match install_gekkoapp(&reporter, &environment, true) {
+                    Ok(()) => {}
+                    Err(error) => reporter.err(&format!("GekkoApp no se actualizó: {error}")),
                 }
-
-                if eleccion_global == "3" {
-                    press_enter_to_continue(&reporter);
-                    continue;
-                }
-
-                if !install_zsh_starship(&reporter) {
-                    reporter.err("La instalación de ZSH falló. Abortando 'Instalar TODO'.");
-                    press_enter_to_continue(&reporter);
-                    continue;
-                }
-
-                let ok = if eleccion_global == "1" {
-                    install_hyprland(&reporter)
-                } else {
-                    install_niri(&reporter)
-                };
-
-                if !ok {
-                    reporter.err(
-                        "La instalación del entorno gráfico falló o fue cancelada. Abortando 'Instalar TODO'.",
-                    );
-                    press_enter_to_continue(&reporter);
-                    continue;
-                }
-
-                if install_bauh(&reporter, &environment, true).is_err() {
-                    reporter.err("La instalación de Bauh falló. Abortando 'Instalar TODO'.");
-                    press_enter_to_continue(&reporter);
-                    continue;
-                }
-
-                reporter.ok("¡El sistema global se configuró con éxito!");
-                reporter.warn("Ejecuta módulos de Gaming por separado según tu GPU.");
-                std::thread::sleep(std::time::Duration::from_secs(4));
                 press_enter_to_continue(&reporter);
             }
             "0" => {
@@ -343,7 +297,7 @@ fn main() {
                 break;
             }
             _ => {
-                reporter.warn("Opción no válida. Selecciona un número del 0 al 9.");
+                reporter.warn("Opción no válida. Selecciona una opción del menú.");
                 std::thread::sleep(std::time::Duration::from_secs(2));
             }
         }

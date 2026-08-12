@@ -12,7 +12,14 @@
         <span class="logo">GekkoApp</span>
         <span class="tagline">Control Center</span>
       </div>
-      <div id="env" class="env">Detectando entorno...</div>
+      <div class="topbar-right">
+        <div class="bell" id="bell">
+          <button id="bell-toggle" class="bell-toggle" type="button" aria-label="Actualizaciones disponibles">🔔</button>
+          <span id="bell-badge" class="bell-badge hidden">0</span>
+          <div id="bell-menu" class="bell-menu hidden"></div>
+        </div>
+        <div id="env" class="env">Detectando entorno...</div>
+      </div>
     </header>
 
     <main class="grid">
@@ -39,6 +46,103 @@
           <input id="bauh-pass" type="password" placeholder="Contrasena de sudo" autocomplete="off" />
           <button id="bauh-install" type="button" disabled>Instalar / Actualizar</button>
         </div>
+      </section>
+
+      <section class="card" id="gekko-adb-card">
+        <div class="card-head">
+          <h2>Gekko ADB Studio</h2>
+          <span id="gekko-adb-status" class="badge">cargando...</span>
+        </div>
+        <p class="muted">Suite GTK de control ADB (scrcpy, shell, debloat, presets). Instalada desde el codigo fuente del repo.</p>
+        <div class="actions">
+          <input id="gekko-adb-pass" type="password" placeholder="Contrasena de sudo" autocomplete="off" />
+          <button id="gekko-adb-install" type="button" disabled>Instalar / Actualizar</button>
+        </div>
+      </section>
+
+      <section class="card" id="gekkoapp-card">
+        <div class="card-head">
+          <h2>GekkoApp (Control Center)</h2>
+          <span id="gekkoapp-status" class="badge">cargando...</span>
+        </div>
+        <p class="muted">Esta misma aplicacion: se actualiza a si misma desde un release firmado (SHA-256). No requiere sudo.</p>
+        <div class="actions">
+          <button id="gekkoapp-install" type="button">Actualizar GekkoApp</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-head">
+          <h2>Terminal Bonita</h2>
+          <span class="badge">ZSH + Starship</span>
+        </div>
+        <p class="muted">Kitty, ZSH, Starship, plugins y aliases de The-Gekko.</p>
+        <div class="actions">
+          <input id="terminal-pass" type="password" placeholder="Contrasena de sudo" autocomplete="off" />
+          <button id="terminal-install" type="button" disabled>Instalar</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-head">
+          <h2>Entorno Hyprland</h2>
+          <span class="badge">Wayland</span>
+        </div>
+        <p class="muted">Herramientas y dependencias del preset Hyprland de The-Gekko.</p>
+        <div class="actions">
+          <input id="hyprland-pass" type="password" placeholder="Contrasena de sudo" autocomplete="off" />
+          <button id="hyprland-install" type="button" disabled>Instalar</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-head">
+          <h2>Entorno Niri</h2>
+          <span class="badge">Wayland</span>
+        </div>
+        <p class="muted">Herramientas y dependencias del preset Niri de The-Gekko.</p>
+        <div class="actions">
+          <input id="niri-pass" type="password" placeholder="Contrasena de sudo" autocomplete="off" />
+          <button id="niri-install" type="button" disabled>Instalar</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-head">
+          <h2>Gaming Setup</h2>
+          <span class="badge">Steam + extras</span>
+        </div>
+        <p class="muted">Steam, DXVK, ProtonPlus, Proton GE, gamemode y utilidades. Elige tu GPU.</p>
+        <div class="actions">
+          <select id="gaming-gpu" class="gpu-select">
+            <option value="nvidia">NVIDIA</option>
+            <option value="intel">INTEL</option>
+            <option value="amd">AMD</option>
+          </select>
+          <input id="gaming-pass" type="password" placeholder="Contrasena de sudo" autocomplete="off" />
+          <button id="gaming-install" type="button" disabled>Instalar</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-head">
+          <h2>Chaotic AUR</h2>
+          <span class="badge">Repositorio</span>
+        </div>
+        <p class="muted">Agrega el repositorio Chaotic AUR (keyring + mirrorlist) a pacman.</p>
+        <div class="actions">
+          <input id="chaotic-pass" type="password" placeholder="Contrasena de sudo" autocomplete="off" />
+          <button id="chaotic-install" type="button" disabled>Configurar</button>
+        </div>
+      </section>
+
+      <section class="card" id="theme-card">
+        <div class="card-head">
+          <h2>Theme</h2>
+          <span id="theme-status" class="badge">cargando...</span>
+        </div>
+        <p class="muted" id="theme-desc">Detectando la paleta de matugen...</p>
+        <div id="theme-swatches" class="theme-swatches"></div>
       </section>
 
       <section class="card wide">

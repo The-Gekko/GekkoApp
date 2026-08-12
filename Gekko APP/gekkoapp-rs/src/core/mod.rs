@@ -4,5 +4,6 @@ pub mod github;
 pub mod pacman;
 pub mod reporter;
 pub mod system;
+pub mod theme;
 
 pub use reporter::{CliReporter, Reporter};
