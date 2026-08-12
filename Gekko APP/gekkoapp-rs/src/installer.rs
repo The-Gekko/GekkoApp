@@ -1120,7 +1120,6 @@ pub fn uninstall_registered_module(module_id: &str) -> Result<(), String> {
     Ok(())
 }
 
-
 fn validate_manifest(
     manifest: &ArtifactManifest,
     component_label: &str,

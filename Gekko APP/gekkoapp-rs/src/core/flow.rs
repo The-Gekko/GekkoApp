@@ -483,7 +483,9 @@ pub fn install_bauh(
 
     if is_package_installed("bauh") {
         if solus {
-            return Err("Bauh no se distribuye en los repos de Solus; no hay conflicto.".to_owned());
+            return Err(
+                "Bauh no se distribuye en los repos de Solus; no hay conflicto.".to_owned(),
+            );
         }
         if require_confirmation
             && !reporter.confirm(
@@ -951,11 +953,15 @@ pub fn uninstall_gekko_adb(reporter: &dyn Reporter) -> Result<(), String> {
     if app_desktop.exists() {
         let _ = fs::remove_file(&app_desktop);
     }
-    let legacy_desktop = paths.data_home.join("applications/org.thegekko.gekko_adb.desktop");
+    let legacy_desktop = paths
+        .data_home
+        .join("applications/org.thegekko.gekko_adb.desktop");
     if legacy_desktop.exists() {
         let _ = fs::remove_file(&legacy_desktop);
     }
-    let icon_file = paths.data_home.join("icons/hicolor/512x512/apps/gekko-adb.png");
+    let icon_file = paths
+        .data_home
+        .join("icons/hicolor/512x512/apps/gekko-adb.png");
     if icon_file.exists() {
         let _ = fs::remove_file(&icon_file);
     }
@@ -969,11 +975,16 @@ pub fn uninstall_gekko_adb(reporter: &dyn Reporter) -> Result<(), String> {
     Ok(())
 }
 
-
 /// Desinstala los modulos de Kito registrados.
 pub fn uninstall_kito_environment(reporter: &dyn Reporter) -> Result<(), String> {
     reporter.header("DESINSTALANDO ENTORNO KITO");
-    for id in ["kitsune-compositor", "kiui", "kitowall", "kilivepaper", "kisddm"] {
+    for id in [
+        "kitsune-compositor",
+        "kiui",
+        "kitowall",
+        "kilivepaper",
+        "kisddm",
+    ] {
         let _ = crate::installer::uninstall_registered_module(id);
     }
     reporter.ok("Entorno Kito desinstalado correctamente.");
@@ -1017,4 +1028,3 @@ pub fn uninstall_gaming(reporter: &dyn Reporter) -> bool {
     };
     desinstalar_paquetes(reporter, &packages)
 }
-

@@ -30,7 +30,6 @@ pub fn sh_quote(path: &Path) -> String {
     format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
 }
 
-
 pub fn is_package_installed(pkg: &str) -> bool {
     if check_arch_linux() {
         run_shell_piped(&format!("pacman -Qq '{pkg}' 2>/dev/null")).0
@@ -120,7 +119,9 @@ pub fn instalar_paquetes(reporter: &dyn Reporter, paquetes: &[&str]) -> bool {
         )
     } else {
         if !run_shell(&format!("{} eopkg update-repo -y", sudo_prefix())) {
-            reporter.err("No se pudo actualizar la lista de repositorios de Solus (eopkg update-repo).");
+            reporter.err(
+                "No se pudo actualizar la lista de repositorios de Solus (eopkg update-repo).",
+            );
             return false;
         }
         format!("{} eopkg install -y {}", sudo_prefix(), pkg_list)
