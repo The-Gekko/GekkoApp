@@ -5,6 +5,10 @@
 # Uso:
 #   ./scripts/install.sh
 #
+# NOTA: para instalar el Control Center sin compilar (recomendado para
+# usuarios finales), usa el one-liner:
+#   curl -fsSL https://raw.githubusercontent.com/The-Gekko/GekkoApp/main/scripts/install-release.sh | bash
+#
 # Variables de entorno:
 #   GEKKOAPP_PREFIX   Prefijo de instalacion (default: $HOME/.local)
 #   GEKKOAPP_SKIP_BUILD=1   No reconstruir si los binarios ya existen
@@ -99,3 +103,7 @@ if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
   echo "AVISO: $BIN_DIR no esta en tu PATH. Añádelo, por ejemplo:"
   echo "  echo 'export PATH=\"\$PATH:$BIN_DIR\"' >> ~/.bashrc"
 fi
+
+echo
+echo "¿Quieres evitarte la compilacion la proxima vez? Instala la GUI desde el release firmado:"
+echo "  curl -fsSL https://raw.githubusercontent.com/The-Gekko/GekkoApp/main/scripts/install-release.sh | bash"
