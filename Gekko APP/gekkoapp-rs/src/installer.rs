@@ -1,4 +1,4 @@
-use crate::kito::{ComponentId, ReleaseState, ReleaseStatus};
+use crate::kito::{ReleaseState, ReleaseStatus};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -14,11 +14,19 @@ const MANIFEST_LIMIT: u64 = 2 * 1024 * 1024;
 const ARTIFACT_LIMIT: u64 = 512 * 1024 * 1024;
 const STATE_SCHEMA_VERSION: u32 = 1;
 
+pub(crate) const MANIFEST_LIMIT_BYTES: u64 = MANIFEST_LIMIT;
+
+fn default_install_method() -> String {
+    "native".to_string()
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct ArtifactManifest {
     pub schema_version: u32,
     pub kind: String,
     pub distribution_contract: String,
+    #[serde(default = "default_install_method")]
+    pub install_method: String,
     pub product: Product,
     pub release: Release,
     pub platform: Platform,
@@ -125,10 +133,62 @@ pub struct DesktopIcon {
 
 #[derive(Debug, Clone)]
 pub struct PreparedRelease {
-    pub component: ComponentId,
+    pub component_label: String,
     pub manifest_url: String,
     pub artifact_url: String,
     pub manifest: ArtifactManifest,
+}
+
+/// Identidad verificable de un componente instalado via pipx.
+pub struct PipxIdentity<'a> {
+    pub label: &'a str,
+    pub product_id: &'a str,
+    pub repository: &'a str,
+}
+
+impl PreparedRelease {
+    /// Build a pipx-managed release after validating the manifest identity.
+    ///
+    /// Used by catalog components that are not Kito products (e.g. Bauh Fork),
+    /// which install via `pipx` instead of the native symlink layout.
+    pub fn prepare_pipx(
+        identity: PipxIdentity<'_>,
+        tag: &str,
+        target: &str,
+        manifest_url: &str,
+        artifact_url: &str,
+        manifest: ArtifactManifest,
+    ) -> Result<Self, String> {
+        validate_manifest(
+            &manifest,
+            identity.label,
+            identity.product_id,
+            identity.repository,
+            tag,
+            target,
+        )?;
+        let host_glibc = detect_glibc_version()?;
+        let minimum_glibc = manifest
+            .platform
+            .libc
+            .minimum
+            .as_deref()
+            .ok_or_else(|| format!("{} no declara glibc minima", identity.label))?;
+        if compare_versions(&host_glibc, minimum_glibc)? == std::cmp::Ordering::Less {
+            return Err(format!(
+                "{} requiere glibc {minimum_glibc}, pero el sistema tiene {host_glibc}",
+                identity.label
+            ));
+        }
+        ensure_https(manifest_url)?;
+        ensure_https(artifact_url)?;
+        Ok(Self {
+            component_label: identity.label.to_string(),
+            manifest_url: manifest_url.to_string(),
+            artifact_url: artifact_url.to_string(),
+            manifest,
+        })
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -223,7 +283,14 @@ impl InstallationPlan {
                     status.component.label()
                 )
             })?;
-            validate_manifest(&manifest, status.component, tag, target)?;
+            validate_manifest(
+                &manifest,
+                status.component.label(),
+                status.component.product_id(),
+                status.component.repository(),
+                tag,
+                target,
+            )?;
             let minimum_glibc =
                 manifest.platform.libc.minimum.as_deref().ok_or_else(|| {
                     format!("{} no declara glibc minima", status.component.label())
@@ -246,7 +313,7 @@ impl InstallationPlan {
                 .clone();
             ensure_https(&artifact_url)?;
             releases.push(PreparedRelease {
-                component: status.component,
+                component_label: status.component.label().to_string(),
                 manifest_url: manifest_url.clone(),
                 artifact_url,
                 manifest,
@@ -254,6 +321,13 @@ impl InstallationPlan {
         }
         validate_module_dependencies(&releases)?;
         Ok(Self { releases })
+    }
+
+    /// Convenience plan for a single pipx-managed component (e.g. Bauh Fork).
+    pub fn pipx_single(release: PreparedRelease) -> Self {
+        Self {
+            releases: vec![release],
+        }
     }
 
     pub fn required_arch_packages(&self) -> Vec<&'static str> {
@@ -306,7 +380,11 @@ impl InstallationPlan {
         }
         validate_activation_destinations(&installed, paths, &state)?;
         for (release, root) in installed {
-            activate_release(release, &root, paths, &mut state)?;
+            if release.manifest.install_method == "python_pipx" {
+                activate_pipx_release(release, &root, paths, &mut state)?;
+            } else {
+                activate_release(release, &root, paths, &mut state)?;
+            }
         }
         write_state(&paths.state_file(), &state)?;
         Ok(state)
@@ -368,7 +446,7 @@ fn ensure_destination_available(path: &Path, owned: &BTreeSet<&str>) -> Result<(
     Ok(())
 }
 
-fn http_agent() -> ureq::Agent {
+pub(crate) fn http_agent() -> ureq::Agent {
     ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(180)))
         .timeout_connect(Some(Duration::from_secs(10)))
@@ -378,7 +456,11 @@ fn http_agent() -> ureq::Agent {
         .into()
 }
 
-fn download_bytes(agent: &ureq::Agent, url: &str, limit: u64) -> Result<Vec<u8>, String> {
+pub(crate) fn download_bytes(
+    agent: &ureq::Agent,
+    url: &str,
+    limit: u64,
+) -> Result<Vec<u8>, String> {
     let mut response = agent
         .get(url)
         .header("Accept", "application/octet-stream")
@@ -623,6 +705,90 @@ fn activate_release(
     Ok(())
 }
 
+/// Activate a pipx-managed release: `pipx install --force` the verified source
+/// tree (extracted root), then materialize desktop integration and record the
+/// resulting launchers and files as owned.
+fn activate_pipx_release(
+    release: &PreparedRelease,
+    root: &Path,
+    paths: &InstallPaths,
+    state: &mut InstallationState,
+) -> Result<(), String> {
+    let product = &release.manifest.product.id;
+    let previous_owned = state
+        .modules
+        .get(product)
+        .map(|module| {
+            module
+                .owned_paths
+                .iter()
+                .map(|owned| owned.path.as_str())
+                .collect::<BTreeSet<_>>()
+        })
+        .unwrap_or_default();
+
+    let pipx = Command::new("pipx")
+        .arg("install")
+        .arg("--force")
+        .arg(root)
+        .status()
+        .map_err(|error| format!("no se pudo ejecutar pipx: {error}"))?;
+    if !pipx.success() {
+        return Err(format!(
+            "pipx no pudo instalar el artefacto verificado de {}",
+            release.component_label
+        ));
+    }
+
+    let mut entrypoints = BTreeMap::new();
+    let mut owned_paths = Vec::new();
+    for entrypoint in &release.manifest.entrypoints {
+        validate_entrypoint_name(&entrypoint.name)?;
+        let launcher = paths.bin_home.join(&entrypoint.name);
+        if !launcher.is_file() {
+            return Err(format!(
+                "pipx no creo el lanzador esperado: {}",
+                launcher.display()
+            ));
+        }
+        entrypoints.insert(entrypoint.name.clone(), launcher.display().to_string());
+        owned_paths.push(OwnedPath {
+            path: launcher.display().to_string(),
+            kind: "file".into(),
+            sha256: None,
+            target: None,
+        });
+    }
+
+    for desktop in &release.manifest.integrations.desktop_entries {
+        activate_desktop_integration(
+            desktop,
+            root,
+            paths,
+            &entrypoints,
+            &previous_owned,
+            &mut owned_paths,
+        )?;
+    }
+
+    state.schema_version = STATE_SCHEMA_VERSION;
+    state.modules.insert(
+        product.clone(),
+        InstalledModule {
+            version: release.manifest.product.version.clone(),
+            contract_version: release.manifest.product.contract_version.clone(),
+            active_root: root.display().to_string(),
+            manifest_url: release.manifest_url.clone(),
+            artifact_url: release.artifact_url.clone(),
+            artifact_sha256: release.manifest.artifact.sha256.clone(),
+            entrypoints,
+            owned_paths,
+            activated_at_unix: now_unix()?,
+        },
+    );
+    Ok(())
+}
+
 fn activate_desktop_integration(
     desktop: &DesktopEntry,
     root: &Path,
@@ -785,7 +951,9 @@ fn write_state(path: &Path, state: &InstallationState) -> Result<(), String> {
 
 fn validate_manifest(
     manifest: &ArtifactManifest,
-    component: ComponentId,
+    component_label: &str,
+    expected_product_id: &str,
+    expected_repository: &str,
     expected_tag: &str,
     expected_target: &str,
 ) -> Result<(), String> {
@@ -795,32 +963,26 @@ fn validate_manifest(
     {
         return Err("contrato de distribucion no soportado".into());
     }
-    if manifest.product.id != component_id(component)
-        || manifest.product.repository != component.repository()
+    if manifest.product.id != expected_product_id
+        || manifest.product.repository != expected_repository
     {
         return Err(format!(
             "identidad de producto invalida para {}",
-            component.label()
+            component_label
         ));
     }
     if manifest.release.tag != expected_tag
         || manifest.product.version != expected_tag.trim_start_matches('v')
         || manifest.release.channel != "stable"
     {
-        return Err(format!(
-            "version o canal invalido para {}",
-            component.label()
-        ));
+        return Err(format!("version o canal invalido para {}", component_label));
     }
     if manifest.platform.os != "linux"
         || manifest.platform.arch != "x86_64"
         || manifest.platform.target != expected_target
         || manifest.platform.libc.family != "glibc"
     {
-        return Err(format!(
-            "plataforma incompatible para {}",
-            component.label()
-        ));
+        return Err(format!("plataforma incompatible para {}", component_label));
     }
     if manifest
         .platform
@@ -1017,7 +1179,7 @@ fn validate_application_id(id: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn ensure_https(url: &str) -> Result<(), String> {
+pub(crate) fn ensure_https(url: &str) -> Result<(), String> {
     if !url.starts_with("https://") {
         return Err(format!("solo se permiten descargas HTTPS: {url}"));
     }
@@ -1034,16 +1196,6 @@ fn safe_file_name(name: &str) -> bool {
 
 fn is_sha256(value: &str) -> bool {
     value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
-}
-
-fn component_id(component: ComponentId) -> &'static str {
-    match component {
-        ComponentId::Compositor => "kitsune-compositor",
-        ComponentId::Kiui => "kiui",
-        ComponentId::Kitowall => "kitowall",
-        ComponentId::Kilivepaper => "kilivepaper",
-        ComponentId::Kisddm => "kisddm",
-    }
 }
 
 fn env_path(name: &str) -> Option<PathBuf> {
@@ -1136,6 +1288,7 @@ fn io_error(context: &'static str) -> impl FnOnce(io::Error) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::kito::ComponentId;
     use std::io::Cursor;
 
     #[test]
@@ -1151,7 +1304,7 @@ mod tests {
         let manifest = test_manifest();
         let plan = InstallationPlan {
             releases: vec![PreparedRelease {
-                component: ComponentId::Kiui,
+                component_label: ComponentId::Kiui.label().to_string(),
                 manifest_url: "https://example.test/manifest.json".into(),
                 artifact_url: "https://example.test/archive.tar.zst".into(),
                 manifest,
@@ -1169,6 +1322,92 @@ mod tests {
             desktop_exec_quote("/home/Kito User/$bin/kiui"),
             "\"/home/Kito User/\\$bin/kiui\""
         );
+    }
+
+    #[test]
+    #[ignore = "requiere GEKKOAPP_BAUH_DIST apuntando a un release generado por scripts/build-bauh-release.sh"]
+    fn consumes_a_generated_pipx_bauh_release() {
+        let dist = std::env::var("GEKKOAPP_BAUH_DIST").expect("GEKKOAPP_BAUH_DIST sin definir");
+        let dist = Path::new(&dist);
+        let manifest_path = fs::read_dir(dist)
+            .expect("leer dist")
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .find(|path| path.extension().is_some_and(|ext| ext == "json"))
+            .expect("falta el manifiesto en dist");
+        let archive_path = fs::read_dir(dist)
+            .expect("leer dist")
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .find(|path| path.extension().is_some_and(|ext| ext == "zst"))
+            .expect("falta el artefacto en dist");
+
+        let bytes = fs::read(&manifest_path).expect("leer manifiesto");
+        let manifest: ArtifactManifest =
+            serde_json::from_slice(&bytes).expect("manifiesto JSON invalido");
+        assert_eq!(manifest.install_method, "python_pipx");
+
+        let tag = manifest.release.tag.clone();
+        let target = manifest.platform.target.clone();
+        validate_manifest(
+            &manifest,
+            crate::core::catalog::BAUH_LABEL,
+            crate::core::catalog::BAUH_PRODUCT_ID,
+            crate::core::catalog::BAUH_REPOSITORY,
+            &tag,
+            &target,
+        )
+        .expect("el manifiesto debe pasar la validacion del motor");
+
+        let root = env::temp_dir().join(format!(
+            "gekkoapp-bauh-contract-{}-{}",
+            std::process::id(),
+            now_unix().unwrap()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let paths = InstallPaths {
+            bin_home: root.join("bin"),
+            data_home: root.join("data"),
+            state_home: root.join("state"),
+            cache_home: root.join("cache"),
+            versions_home: root.join("versions"),
+        };
+
+        let release = PreparedRelease {
+            component_label: crate::core::catalog::BAUH_LABEL.to_string(),
+            manifest_url: "https://example.test/manifest.json".into(),
+            artifact_url: "https://example.test/archive.tar.zst".into(),
+            manifest: manifest.clone(),
+        };
+        let installed_root = install_version(&release, &archive_path, &paths)
+            .expect("la version debe extraerse y verificarse contra el payload");
+
+        let desktop = &manifest.integrations.desktop_entries[0];
+        let entrypoints: BTreeMap<String, String> = manifest
+            .entrypoints
+            .iter()
+            .map(|entrypoint| (entrypoint.name.clone(), "/tmp/.local/bin/bauh".to_string()))
+            .collect();
+        let mut owned = Vec::new();
+        activate_desktop_integration(
+            desktop,
+            &installed_root,
+            &paths,
+            &entrypoints,
+            &BTreeSet::new(),
+            &mut owned,
+        )
+        .expect("la integracion desktop debe materializarse");
+
+        let desktop_file = paths
+            .data_home
+            .join("applications")
+            .join(format!("{}.desktop", desktop.application_id));
+        let content = fs::read_to_string(&desktop_file).expect("leer .desktop generado");
+        assert!(content.contains("Exec=\"/tmp/.local/bin/bauh\""));
+        assert!(!content.contains('@'));
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -1222,7 +1461,7 @@ mod tests {
         manifest.payload[0].size_bytes = executable.len() as u64;
         manifest.payload[0].sha256 = sha256_bytes(executable);
         let release = PreparedRelease {
-            component: ComponentId::Kiui,
+            component_label: ComponentId::Kiui.label().to_string(),
             manifest_url: "https://example.test/manifest.json".into(),
             artifact_url: "https://example.test/archive.tar.zst".into(),
             manifest,

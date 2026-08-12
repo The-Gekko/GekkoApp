@@ -11,6 +11,20 @@ if [ ! -d "$RUST_APP_DIR" ]; then
 fi
 RELEASE_BIN="$RUST_APP_DIR/target/release/gekkoapp"
 
+# Modo Control Center (interfaz de escritorio Tauri v2)
+if [ "${1:-}" = "--gui" ]; then
+    GUI_BIN="$RUST_APP_DIR/target/release/gekkoapp-gui"
+    if [ -x "$GUI_BIN" ]; then
+        exec "$GUI_BIN"
+    fi
+    if command -v cargo >/dev/null 2>&1 && [ -d "$RUST_APP_DIR" ]; then
+        echo "Iniciando GekkoApp Control Center (Rust)..."
+        cd "$RUST_APP_DIR" && exec cargo run --release --features gui --bin gekkoapp-gui
+    fi
+    echo "No se pudo lanzar el Control Center: falta la interfaz 'gui' compilada." >&2
+    exit 1
+fi
+
 # Priorizar el binario en Rust auditado si está compilado
 if [ -x "$RELEASE_BIN" ]; then
     exec "$RELEASE_BIN" "$@"
@@ -122,7 +136,7 @@ install_chaotic_aur() {
 
 install_bauh() {
     print_header "INSTALANDO TIENDA BAUH FORK (THE-GEKKO)"
-    instalar_paquetes python-pipx git
+    instalar_paquetes python-pipx curl zstd
 
     if pacman -Qq bauh >/dev/null 2>&1; then
         print_warning "Se detectó el paquete 'bauh' oficial instalado mediante pacman."
@@ -130,25 +144,32 @@ install_bauh() {
         sudo pacman -Rns --noconfirm bauh || print_warning "No se pudo desinstalar bauh de pacman. Continuando..."
     fi
 
-    LOCAL_FORK="/home/thegekko/Documentos/Proyecto Anti/Bauh Fork The-Gekko"
-    REPO_URL="https://github.com/The-Gekko/Bauh-Fork-The-Gekko.git"
+    # Fallback robusto: release firmado desde GitHub + verificación SHA-256 + pipx.
+    # No clona el repositorio ni ejecuta install.sh remoto (curl | bash).
+    REPO="The-Gekko/Bauh-Fork-The-Gekko"
+    print_info "Obteniendo último release firmado de $REPO..."
+    TAG=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" \
+        | python3 -c 'import json,sys; print(json.load(sys.stdin)["tag_name"].lstrip("v"))')
 
-    if [ -f "$LOCAL_FORK/install.sh" ]; then
-        print_success "Usando repositorio local: $LOCAL_FORK"
-        (cd "$LOCAL_FORK" && bash install.sh --yes)
-    else
-        print_info "Clonando repositorio remoto del fork de Bauh..."
-        CACHE_DIR="$HOME/.cache/gekkoapp/Bauh-Fork-The-Gekko"
-        mkdir -p "$HOME/.cache/gekkoapp"
-        if [ -d "$CACHE_DIR/.git" ]; then
-            (cd "$CACHE_DIR" && git pull)
-        else
-            git clone "$REPO_URL" "$CACHE_DIR"
-        fi
-        (cd "$CACHE_DIR" && bash install.sh --yes)
+    CACHE="$HOME/.cache/gekkoapp/bauh-$TAG"
+    mkdir -p "$CACHE"
+    curl -fsSL "https://github.com/$REPO/releases/download/v$TAG/bauh-fork-the-gekko-$TAG.tar.zst" -o "$CACHE/archive.tar.zst"
+    curl -fsSL "https://github.com/$REPO/releases/download/v$TAG/bauh-fork-the-gekko-x86_64-unknown-linux-gnu.manifest.json" -o "$CACHE/manifest.json"
+
+    EXPECTED=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["artifact"]["sha256"])' "$CACHE/manifest.json")
+    ACTUAL=$(sha256sum "$CACHE/archive.tar.zst" | cut -d' ' -f1)
+    if [ "$EXPECTED" != "$ACTUAL" ]; then
+        print_warning "La verificación SHA-256 del release falló; se aborta la instalación por seguridad."
+        sleep 2
+        return 1
     fi
 
-    print_success "¡Bauh Fork (The-Gekko) instalado correctamente!"
+    print_info "Verificación SHA-256 correcta. Extrayendo e instalando con pipx..."
+    tar --zstd -xf "$CACHE/archive.tar.zst" -C "$CACHE"
+    SRC_DIR=$(find "$CACHE" -mindepth 1 -maxdepth 1 -type d | head -n 1)
+    BAUH_SETUP_NO_REQS=1 pipx install --force "$SRC_DIR"
+
+    print_success "¡Bauh Fork (The-Gekko) $TAG instalado correctamente!"
     sleep 2
 }
 

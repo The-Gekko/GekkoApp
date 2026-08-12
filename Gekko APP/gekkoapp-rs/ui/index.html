@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>GekkoApp Control Center</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="logo">GekkoApp</span>
+        <span class="tagline">Control Center</span>
+      </div>
+      <div id="env" class="env">Detectando entorno...</div>
+    </header>
+
+    <main class="grid">
+      <section class="card" id="kito-card">
+        <div class="card-head">
+          <h2>Entorno Kito</h2>
+          <span id="kito-status" class="badge">cargando...</span>
+        </div>
+        <p class="muted">KiUI + Kitsune Compositor obligatorios. Elige modulos opcionales.</p>
+        <div id="kito-modules" class="modules">...</div>
+        <div class="actions">
+          <input id="kito-pass" type="password" placeholder="Contrasena de sudo" autocomplete="off" />
+          <button id="kito-install" type="button" disabled>Instalar / Actualizar</button>
+        </div>
+      </section>
+
+      <section class="card" id="bauh-card">
+        <div class="card-head">
+          <h2>Tienda Bauh Fork</h2>
+          <span id="bauh-status" class="badge">cargando...</span>
+        </div>
+        <p class="muted">Instalada con pipx desde un release firmado (SHA-256).</p>
+        <div class="actions">
+          <input id="bauh-pass" type="password" placeholder="Contrasena de sudo" autocomplete="off" />
+          <button id="bauh-install" type="button" disabled>Instalar / Actualizar</button>
+        </div>
+      </section>
+
+      <section class="card wide">
+        <div class="card-head">
+          <h2>Progreso</h2>
+          <span id="progress-label" class="muted"></span>
+        </div>
+        <div class="bar"><div id="bar-fill" class="bar-fill"></div></div>
+        <pre id="log" class="log"></pre>
+      </section>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>

@@ -1,5 +1,6 @@
 /target
 /Gekko APP/gekkoapp-rs/target
+/Gekko APP/gekkoapp-rs/gen
 Gekko APP/gekkoapp
 Gekko APP/release.zip
 *.bundle
@@ -7,3 +8,4 @@ gekkoapp
 release.zip
 patch.diff
 SHA256SUMS.txt
+/releases/

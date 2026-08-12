@@ -1,6 +1,5 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
-use std::time::Duration;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ComponentId {
@@ -22,6 +21,16 @@ impl ComponentId {
         }
     }
 
+    pub fn product_id(self) -> &'static str {
+        match self {
+            Self::Compositor => "kitsune-compositor",
+            Self::Kiui => "kiui",
+            Self::Kitowall => "kitowall",
+            Self::Kilivepaper => "kilivepaper",
+            Self::Kisddm => "kisddm",
+        }
+    }
+
     pub fn repository(self) -> &'static str {
         match self {
             Self::Compositor => "KitotsuMolina/Kito-compositor",
@@ -33,7 +42,7 @@ impl ComponentId {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct ModuleSelection {
     pub kitowall: bool,
     pub kilivepaper: bool,
@@ -77,72 +86,16 @@ pub enum ReleaseState {
     Unavailable(String),
 }
 
-#[derive(Debug, Deserialize)]
-struct GithubRelease {
-    tag_name: String,
-    assets: Vec<GithubAsset>,
-}
-
-#[derive(Debug, Deserialize)]
-struct GithubAsset {
-    name: String,
-    browser_download_url: String,
-}
-
 pub fn resolve_releases(components: &[ComponentId], target: &str) -> Vec<ReleaseStatus> {
-    let agent: ureq::Agent = ureq::Agent::config_builder()
-        .timeout_global(Some(Duration::from_secs(20)))
-        .timeout_connect(Some(Duration::from_secs(5)))
-        .timeout_recv_body(Some(Duration::from_secs(15)))
-        .user_agent("GekkoApp/1.1")
-        .build()
-        .into();
-
     components
         .iter()
         .copied()
-        .map(|component| resolve_release(&agent, component, target))
+        .map(|component| resolve_release(component, target))
         .collect()
 }
 
-fn resolve_release(agent: &ureq::Agent, component: ComponentId, target: &str) -> ReleaseStatus {
-    let url = format!(
-        "https://api.github.com/repos/{}/releases/latest",
-        component.repository()
-    );
-    let result = (|| {
-        let mut response = agent
-            .get(&url)
-            .header("Accept", "application/vnd.github+json")
-            .call()
-            .map_err(|error| format!("release no disponible: {error}"))?;
-        let body = response
-            .body_mut()
-            .with_config()
-            .limit(2 * 1024 * 1024)
-            .read_to_string()
-            .map_err(|error| format!("respuesta invalida: {error}"))?;
-        let release: GithubRelease =
-            serde_json::from_str(&body).map_err(|error| format!("JSON invalido: {error}"))?;
-        let suffix = format!("-{target}.manifest.json");
-        let manifest = release
-            .assets
-            .iter()
-            .find(|asset| asset.name.ends_with(&suffix))
-            .ok_or_else(|| format!("el release {} no incluye {target}", release.tag_name))?;
-        let asset_urls = release
-            .assets
-            .iter()
-            .map(|asset| (asset.name.clone(), asset.browser_download_url.clone()))
-            .collect();
-        Ok::<_, String>((
-            release.tag_name,
-            manifest.browser_download_url.clone(),
-            asset_urls,
-        ))
-    })();
-
-    let state = match result {
+fn resolve_release(component: ComponentId, target: &str) -> ReleaseStatus {
+    let state = match crate::core::github::resolve_latest_release(component.repository(), target) {
         Ok((tag, manifest_url, asset_urls)) => ReleaseState::Available {
             version: tag.trim_start_matches('v').to_string(),
             tag,

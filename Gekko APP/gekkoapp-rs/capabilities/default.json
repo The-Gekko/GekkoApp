@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Permisos de la ventana principal del Control Center",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

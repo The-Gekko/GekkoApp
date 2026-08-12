@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=GekkoApp Control Center
+GenericName=Post-install & configuration tool
+Comment=Instala y actualiza tu entorno (Kito, Bauh Fork) desde releases firmados
+Exec=__GEKKOAPP_GUI_BIN__
+Icon=org.thegekko.gekkoapp
+Terminal=false
+Categories=System;Settings;PackageManager;
+Keywords=gekkoapp;control;center;kito;bauh;post-install;
+StartupNotify=true
