@@ -2,9 +2,9 @@
 
 use gekkoapp::core::flow::{
     install_bauh, install_gaming, install_gekko_adb, install_gekkoapp, install_hyprland,
-    install_kito_environment, install_niri, install_zsh_starship, uninstall_bauh,
-    uninstall_gaming, uninstall_gekko_adb, uninstall_hyprland, uninstall_kito_environment,
-    uninstall_niri, uninstall_zsh_starship,
+    install_kito_environment, install_niri, install_zsh_starship, uninstall_bauh, uninstall_gaming,
+    uninstall_gekko_adb, uninstall_hyprland, uninstall_kito_environment, uninstall_niri,
+    uninstall_zsh_starship,
 };
 use gekkoapp::core::pacman::install_chaotic_aur;
 
@@ -119,7 +119,6 @@ fn print_banner(env: &SystemEnvironment) {
     println!("{}\n", RESET);
 }
 
-
 // ─────────────────────────────────────────────────────────────────────────────
 //  Menu
 // ─────────────────────────────────────────────────────────────────────────────
@@ -131,88 +130,110 @@ struct MenuItem {
     badge: Option<(&'static str, &'static str)>,
 }
 
-fn print_menu() {
-    let items = [
-        MenuItem {
+fn print_menu(env: &SystemEnvironment) {
+    let is_arch = env.distro_id == "arch" || env.distro_like.iter().any(|id| id == "arch");
+    let is_solus = env.distro_id == "solus" || env.distro_like.iter().any(|id| id == "solus");
+
+    let mut items = Vec::new();
+
+    if env.compatibility.supported {
+        items.push(MenuItem {
             key: "K",
             icon: "🦊",
             label: "Instalar entorno Kito     (KiUI + modulos)",
             badge: Some(("NUEVO", FG_MAGENTA)),
-        },
-        MenuItem {
+        });
+    }
+
+    if is_arch || is_solus {
+        items.push(MenuItem {
             key: "1",
             icon: "🐚",
             label: "Terminal Bonita           (ZSH + Starship + Plugins)",
             badge: None,
-        },
-        MenuItem {
+        });
+    }
+
+    if is_arch {
+        items.push(MenuItem {
             key: "2",
             icon: "🪟",
             label: "Entorno Hyprland          (Herramientas + Deps)",
             badge: None,
-        },
-        MenuItem {
+        });
+        items.push(MenuItem {
             key: "3",
             icon: "🪟",
             label: "Entorno Niri              (Herramientas + Deps)",
             badge: None,
-        },
-        MenuItem {
+        });
+    }
+
+    if is_arch || is_solus {
+        items.push(MenuItem {
             key: "4",
             icon: "🎮",
             label: "Gaming Setup",
             badge: Some(("NVIDIA", FG_GREEN)),
-        },
-        MenuItem {
+        });
+        items.push(MenuItem {
             key: "5",
             icon: "🎮",
             label: "Gaming Setup",
             badge: Some(("INTEL", FG_CYAN)),
-        },
-        MenuItem {
+        });
+        items.push(MenuItem {
             key: "6",
             icon: "🎮",
             label: "Gaming Setup",
             badge: Some(("AMD", FG_RED)),
-        },
-        MenuItem {
+        });
+    }
+
+    if is_arch {
+        items.push(MenuItem {
             key: "7",
             icon: "📦",
             label: "Agregar repositorios      Chaotic AUR",
             badge: None,
-        },
-        MenuItem {
+        });
+    }
+
+    if is_arch || is_solus {
+        items.push(MenuItem {
             key: "8",
             icon: "🛍️",
             label: "Tienda Bauh               (Parcheado + AUR)",
             badge: None,
-        },
-        MenuItem {
+        });
+        items.push(MenuItem {
             key: "b",
             icon: "📱",
             label: "Gekko ADB Studio         (Control ADB GTK)",
             badge: Some(("NUEVO", FG_MAGENTA)),
-        },
-        MenuItem {
-            key: "u",
-            icon: "🔄",
-            label: "Actualizar GekkoApp        (Auto-update)",
-            badge: Some(("NUEVO", FG_MAGENTA)),
-        },
-        MenuItem {
-            key: "d",
-            icon: "🗑️ ",
-            label: "Desinstalar componentes   (Submenú de desinstalación)",
-            badge: Some(("DESINSTALADOR", FG_RED)),
-        },
-        MenuItem {
-            key: "0",
-            icon: "❌",
-            label: "Salir",
-            badge: None,
-        },
-    ];
+        });
+    }
 
+    items.push(MenuItem {
+        key: "u",
+        icon: "🔄",
+        label: "Actualizar GekkoApp        (Auto-update)",
+        badge: Some(("NUEVO", FG_MAGENTA)),
+    });
+
+    items.push(MenuItem {
+        key: "d",
+        icon: "🗑️ ",
+        label: "Desinstalar componentes   (Submenú de desinstalación)",
+        badge: Some(("DESINSTALADOR", FG_RED)),
+    });
+
+    items.push(MenuItem {
+        key: "0",
+        icon: "❌",
+        label: "Salir",
+        badge: None,
+    });
 
     println!(
         "  {}{}Selecciona una opción para configurar tu entorno:{}",
@@ -243,7 +264,10 @@ fn print_menu() {
 
 fn run_uninstall_menu(reporter: &dyn Reporter) {
     println!();
-    println!("  {}{}--- MENÚ DE DESINSTALACIÓN ---{}", FG_WHITE, BOLD, RESET);
+    println!(
+        "  {}{}--- MENÚ DE DESINSTALACIÓN ---{}",
+        FG_WHITE, BOLD, RESET
+    );
     println!("  {}[1]{} Desinstalar Tienda Bauh Fork", FG_CYAN, RESET);
     println!("  {}[2]{} Desinstalar Gekko ADB Studio", FG_CYAN, RESET);
     println!("  {}[3]{} Desinstalar Entorno Kito", FG_CYAN, RESET);
@@ -253,19 +277,38 @@ fn run_uninstall_menu(reporter: &dyn Reporter) {
     println!("  {}[7]{} Desinstalar Gaming Setup", FG_CYAN, RESET);
     println!("  {}[0]{} Cancelar", FG_RED, RESET);
     println!();
-    print!("  {}{}Selecciona el componente a desinstalar:{} ", FG_WHITE, BOLD, RESET);
+    print!(
+        "  {}{}Selecciona el componente a desinstalar:{} ",
+        FG_WHITE, BOLD, RESET
+    );
     let _ = io::stdout().flush();
 
     let choice = read_line();
     match choice.as_str() {
-        "1" => { let _ = uninstall_bauh(reporter); }
-        "2" => { let _ = uninstall_gekko_adb(reporter); }
-        "3" => { let _ = uninstall_kito_environment(reporter); }
-        "4" => { uninstall_zsh_starship(reporter); }
-        "5" => { uninstall_hyprland(reporter); }
-        "6" => { uninstall_niri(reporter); }
-        "7" => { uninstall_gaming(reporter); }
-        _ => { reporter.info("Desinstalación cancelada."); }
+        "1" => {
+            let _ = uninstall_bauh(reporter);
+        }
+        "2" => {
+            let _ = uninstall_gekko_adb(reporter);
+        }
+        "3" => {
+            let _ = uninstall_kito_environment(reporter);
+        }
+        "4" => {
+            uninstall_zsh_starship(reporter);
+        }
+        "5" => {
+            uninstall_hyprland(reporter);
+        }
+        "6" => {
+            uninstall_niri(reporter);
+        }
+        "7" => {
+            uninstall_gaming(reporter);
+        }
+        _ => {
+            reporter.info("Desinstalación cancelada.");
+        }
     }
 }
 
@@ -274,7 +317,7 @@ fn main() {
     let environment = SystemEnvironment::detect();
     loop {
         print_banner(&environment);
-        print_menu();
+        print_menu(&environment);
 
         let option = read_line();
 
@@ -349,4 +392,3 @@ fn main() {
         }
     }
 }
-

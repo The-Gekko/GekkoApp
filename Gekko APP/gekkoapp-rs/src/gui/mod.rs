@@ -152,7 +152,6 @@ pub struct CatalogView {
     kito_modules: Vec<ModuleView>,
 }
 
-
 fn installed_versions() -> BTreeMap<String, String> {
     let Ok(paths) = InstallPaths::detect() else {
         return BTreeMap::new();
@@ -203,8 +202,13 @@ fn installed_version_of(
         CatalogComponent::BauhFork => {
             let launcher = paths.bin_home.join("bauh");
             if launcher.exists() || is_binary_in_path("bauh") {
+                let cmd = if launcher.exists() {
+                    crate::core::system::sh_quote(&launcher)
+                } else {
+                    "bauh".to_string()
+                };
                 let (_, version_output) =
-                    crate::core::system::run_shell_piped("bauh --version 2>/dev/null");
+                    crate::core::system::run_shell_piped(&format!("{} --version 2>/dev/null", cmd));
                 let v = version_output.trim();
                 if let Some(ver) = v.strip_prefix("bauh ") {
                     let ver = ver.trim();
@@ -289,7 +293,6 @@ fn catalog_state() -> CatalogView {
         })
         .collect();
 
-
     let target = environment.target();
 
     CatalogView {
@@ -303,7 +306,6 @@ fn catalog_state() -> CatalogView {
         items,
         kito_modules,
     }
-
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -603,21 +605,17 @@ async fn uninstall_kito(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 async fn uninstall_bauh(app: AppHandle) -> Result<(), String> {
     let reporter = GuiReporter { app };
-    tauri::async_runtime::spawn_blocking(move || {
-        crate::core::flow::uninstall_bauh(&reporter)
-    })
-    .await
-    .map_err(|error| format!("Error al desinstalar Bauh: {error}"))?
+    tauri::async_runtime::spawn_blocking(move || crate::core::flow::uninstall_bauh(&reporter))
+        .await
+        .map_err(|error| format!("Error al desinstalar Bauh: {error}"))?
 }
 
 #[tauri::command]
 async fn uninstall_gekko_adb(app: AppHandle) -> Result<(), String> {
     let reporter = GuiReporter { app };
-    tauri::async_runtime::spawn_blocking(move || {
-        crate::core::flow::uninstall_gekko_adb(&reporter)
-    })
-    .await
-    .map_err(|error| format!("Error al desinstalar Gekko ADB Studio: {error}"))?
+    tauri::async_runtime::spawn_blocking(move || crate::core::flow::uninstall_gekko_adb(&reporter))
+        .await
+        .map_err(|error| format!("Error al desinstalar Gekko ADB Studio: {error}"))?
 }
 
 #[tauri::command]
@@ -704,7 +702,6 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error al ejecutar la interfaz GekkoApp");
-
 }
 
 #[cfg(test)]
