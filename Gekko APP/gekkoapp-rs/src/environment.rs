@@ -82,17 +82,14 @@ impl SystemEnvironment {
 
     pub fn refresh_compatibility(&mut self) {
         let mut reasons = Vec::new();
-        if self.distro_id != "arch" && !self.distro_like.iter().any(|id| id == "arch") {
-            reasons.push("la primera version solo soporta Arch Linux y derivadas".into());
+        let is_arch = self.distro_id == "arch" || self.distro_like.iter().any(|id| id == "arch");
+        let is_solus = self.distro_id == "solus" || self.distro_like.iter().any(|id| id == "solus");
+
+        if !is_arch && !is_solus {
+            reasons.push("GekkoApp solo soporta Arch Linux y Solus (o sus derivadas)".into());
         }
         if self.architecture != "x86_64" {
             reasons.push("la primera version solo publica artefactos x86_64".into());
-        }
-        if self.session != "wayland" {
-            reasons.push("se requiere una sesion Wayland".into());
-        }
-        if self.desktop != "hyprland" {
-            reasons.push("el primer adaptador validado es Hyprland".into());
         }
         if self.service_manager != "systemd-user" {
             reasons.push("se requiere systemd para servicios de usuario".into());
@@ -218,7 +215,7 @@ mod tests {
 
         assert!(!environment.compatibility.supported);
         assert_eq!(environment.package_manager, "apt");
-        assert_eq!(environment.compatibility.reasons.len(), 4);
+        assert_eq!(environment.compatibility.reasons.len(), 2);
     }
 
     #[test]
@@ -231,6 +228,6 @@ mod tests {
         assert_eq!(environment.distro_name, "Solus");
         assert_eq!(environment.package_manager, "eopkg");
         assert_eq!(environment.service_manager, "systemd-user");
-        assert!(!environment.compatibility.supported);
+        assert!(environment.compatibility.supported);
     }
 }

@@ -57,8 +57,48 @@ fn sudo_prefix() -> &'static str {
     }
 }
 
+fn parse_os_release_kv(contents: &str) -> std::collections::HashMap<String, String> {
+    contents
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                return None;
+            }
+            let (key, raw) = line.split_once('=')?;
+            Some((
+                key.to_string(),
+                raw.trim_matches(|ch| ch == '"' || ch == '\'').to_string(),
+            ))
+        })
+        .collect()
+}
+
 pub fn check_arch_linux() -> bool {
-    Path::new("/etc/arch-release").exists()
+    if Path::new("/etc/arch-release").exists() {
+        return true;
+    }
+    let os_release = std::fs::read_to_string("/etc/os-release").unwrap_or_default();
+    let release = parse_os_release_kv(&os_release);
+    if let Some(id) = release.get("ID") {
+        let id_lower = id.to_lowercase();
+        if id_lower == "arch"
+            || id_lower == "garuda"
+            || id_lower == "manjaro"
+            || id_lower == "endeavouros"
+        {
+            return true;
+        }
+    }
+    if let Some(id_like) = release.get("ID_LIKE") {
+        if id_like
+            .split_whitespace()
+            .any(|id| id.eq_ignore_ascii_case("arch"))
+        {
+            return true;
+        }
+    }
+    false
 }
 
 pub fn is_solus_linux() -> bool {
@@ -66,13 +106,21 @@ pub fn is_solus_linux() -> bool {
         return true;
     }
     let os_release = std::fs::read_to_string("/etc/os-release").unwrap_or_default();
-    os_release.lines().any(|line| {
-        let line = line.trim();
-        line == "ID=solus"
-            || line
-                .strip_prefix("ID_LIKE=")
-                .is_some_and(|ids| ids.split_whitespace().any(|id| id == "solus"))
-    })
+    let release = parse_os_release_kv(&os_release);
+    if let Some(id) = release.get("ID") {
+        if id.eq_ignore_ascii_case("solus") {
+            return true;
+        }
+    }
+    if let Some(id_like) = release.get("ID_LIKE") {
+        if id_like
+            .split_whitespace()
+            .any(|id| id.eq_ignore_ascii_case("solus"))
+        {
+            return true;
+        }
+    }
+    false
 }
 
 /// ¿Hay un gestor de paquetes soportado (pacman o eopkg) para operar?
@@ -314,5 +362,26 @@ pub fn print_detected_environment(
         for reason in &environment.compatibility.reasons {
             println!("    {}- {}{}", FG_YELLOW, reason, RESET);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_quoted_os_release_for_solus() {
+        let content = "NAME=\"Solus\"\nID=\"solus\"\nPRETTY_NAME=\"Solus 4.5\"\n";
+        let kv = parse_os_release_kv(content);
+        assert_eq!(kv.get("ID").unwrap(), "solus");
+        assert_eq!(kv.get("NAME").unwrap(), "Solus");
+    }
+
+    #[test]
+    fn parses_id_like_arch_with_quotes() {
+        let content = "NAME=\"Garuda Linux\"\nID=\"garuda\"\nID_LIKE=\"arch\"\n";
+        let kv = parse_os_release_kv(content);
+        assert_eq!(kv.get("ID").unwrap(), "garuda");
+        assert_eq!(kv.get("ID_LIKE").unwrap(), "arch");
     }
 }
