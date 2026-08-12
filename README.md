@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="image.png" alt="GekkoApp" width="720"/>
+  <img src="Gekko%20APP.png" alt="GekkoApp" width="720"/>
 </p>
 
 # 🚀 GekkoApp: Linux Personalizer & Gaming Setup
@@ -178,12 +178,6 @@ opción `u`.
 - Conexión a internet estable.
 - Privilegios de **sudo**.
 - (Solo GUI) WebKitGTK 4.1 y dependencias de Tauri.
-
----
-
-## 📸 Proyecto
-
-![image.png](image.png)
 
 ---
 
