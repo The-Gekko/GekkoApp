@@ -9,3 +9,6 @@ release.zip
 patch.diff
 SHA256SUMS.txt
 /releases/
+
+# Notas internas del agente: no se suben al repositorio.
+/AGENTS.md
