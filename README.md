@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="Gekko%20APP.png" alt="GekkoApp" width="720"/>
+  <img src="Gekko%20APP.png" alt="GekkoApp" width="520"/>
   <br/>
   <em>Imagen hecha con IA · Gemini en su modelo Nano Banana</em>
 </p>
