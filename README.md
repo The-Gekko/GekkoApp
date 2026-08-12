@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="image.png" alt="GekkoApp" width="720"/>
+</p>
+
 # 🚀 GekkoApp: Linux Personalizer & Gaming Setup
 
 **GekkoApp** ha evolucionado. Lo que empezó como un script de automatización ahora es una herramienta robusta desarrollada en **Rust**, para máxima velocidad, seguridad y una experiencia minimalista. **Todo se controla desde el Control Center de escritorio (Tauri v2):** desde ahí instalas, actualizas y recibes las nuevas actualizaciones con un clic.
