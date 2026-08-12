@@ -169,6 +169,8 @@ fn detect_desktop(variables: &HashMap<String, String>) -> String {
 fn detect_package_manager(distro_id: &str, distro_like: &[String]) -> String {
     if distro_id == "arch" || distro_like.iter().any(|id| id == "arch") {
         "pacman".into()
+    } else if distro_id == "solus" || distro_like.iter().any(|id| id == "solus") {
+        "eopkg".into()
     } else if distro_id == "ubuntu"
         || distro_id == "debian"
         || distro_like.iter().any(|id| id == "debian")
@@ -217,5 +219,18 @@ mod tests {
         assert!(!environment.compatibility.supported);
         assert_eq!(environment.package_manager, "apt");
         assert_eq!(environment.compatibility.reasons.len(), 4);
+    }
+
+    #[test]
+    fn detects_solus_environment_with_eopkg() {
+        let vars = HashMap::from([("XDG_SESSION_TYPE".into(), "wayland".into())]);
+        let environment =
+            SystemEnvironment::from_sources("ID=solus\nPRETTY_NAME=\"Solus\"\n", &vars, true);
+
+        assert_eq!(environment.distro_id, "solus");
+        assert_eq!(environment.distro_name, "Solus");
+        assert_eq!(environment.package_manager, "eopkg");
+        assert_eq!(environment.service_manager, "systemd-user");
+        assert!(!environment.compatibility.supported);
     }
 }

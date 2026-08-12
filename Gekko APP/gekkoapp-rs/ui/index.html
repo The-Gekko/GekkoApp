@@ -33,6 +33,7 @@
         <div class="actions">
           <input id="kito-pass" type="password" placeholder="Contrasena de sudo" autocomplete="off" />
           <button id="kito-install" type="button" disabled>Instalar / Actualizar</button>
+          <button id="kito-uninstall" type="button" class="btn-danger">Desinstalar</button>
         </div>
       </section>
 
@@ -45,6 +46,7 @@
         <div class="actions">
           <input id="bauh-pass" type="password" placeholder="Contrasena de sudo" autocomplete="off" />
           <button id="bauh-install" type="button" disabled>Instalar / Actualizar</button>
+          <button id="bauh-uninstall" type="button" class="btn-danger">Desinstalar</button>
         </div>
       </section>
 
@@ -57,6 +59,7 @@
         <div class="actions">
           <input id="gekko-adb-pass" type="password" placeholder="Contrasena de sudo" autocomplete="off" />
           <button id="gekko-adb-install" type="button" disabled>Instalar / Actualizar</button>
+          <button id="gekko-adb-uninstall" type="button" class="btn-danger">Desinstalar</button>
         </div>
       </section>
 
@@ -71,7 +74,7 @@
         </div>
       </section>
 
-      <section class="card">
+      <section class="card" id="terminal-card">
         <div class="card-head">
           <h2>Terminal Bonita</h2>
           <span class="badge">ZSH + Starship</span>
@@ -80,10 +83,11 @@
         <div class="actions">
           <input id="terminal-pass" type="password" placeholder="Contrasena de sudo" autocomplete="off" />
           <button id="terminal-install" type="button" disabled>Instalar</button>
+          <button id="terminal-uninstall" type="button" class="btn-danger">Desinstalar</button>
         </div>
       </section>
 
-      <section class="card">
+      <section class="card" id="hyprland-card">
         <div class="card-head">
           <h2>Entorno Hyprland</h2>
           <span class="badge">Wayland</span>
@@ -92,10 +96,11 @@
         <div class="actions">
           <input id="hyprland-pass" type="password" placeholder="Contrasena de sudo" autocomplete="off" />
           <button id="hyprland-install" type="button" disabled>Instalar</button>
+          <button id="hyprland-uninstall" type="button" class="btn-danger">Desinstalar</button>
         </div>
       </section>
 
-      <section class="card">
+      <section class="card" id="niri-card">
         <div class="card-head">
           <h2>Entorno Niri</h2>
           <span class="badge">Wayland</span>
@@ -104,10 +109,11 @@
         <div class="actions">
           <input id="niri-pass" type="password" placeholder="Contrasena de sudo" autocomplete="off" />
           <button id="niri-install" type="button" disabled>Instalar</button>
+          <button id="niri-uninstall" type="button" class="btn-danger">Desinstalar</button>
         </div>
       </section>
 
-      <section class="card">
+      <section class="card" id="gaming-card">
         <div class="card-head">
           <h2>Gaming Setup</h2>
           <span class="badge">Steam + extras</span>
@@ -121,10 +127,11 @@
           </select>
           <input id="gaming-pass" type="password" placeholder="Contrasena de sudo" autocomplete="off" />
           <button id="gaming-install" type="button" disabled>Instalar</button>
+          <button id="gaming-uninstall" type="button" class="btn-danger">Desinstalar</button>
         </div>
       </section>
 
-      <section class="card">
+      <section class="card" id="chaotic-card">
         <div class="card-head">
           <h2>Chaotic AUR</h2>
           <span class="badge">Repositorio</span>

@@ -141,7 +141,9 @@ pub struct ModuleView {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CatalogView {
+    distro_id: String,
     distro_name: String,
+    package_manager: String,
     session: String,
     desktop: String,
     target: Option<&'static str>,
@@ -149,6 +151,7 @@ pub struct CatalogView {
     items: Vec<CatalogItem>,
     kito_modules: Vec<ModuleView>,
 }
+
 
 fn installed_versions() -> BTreeMap<String, String> {
     let Ok(paths) = InstallPaths::detect() else {
@@ -167,21 +170,90 @@ fn installed_versions() -> BTreeMap<String, String> {
         .collect()
 }
 
+fn is_binary_in_path(name: &str) -> bool {
+    if let Ok(path_var) = std::env::var("PATH") {
+        for dir in std::env::split_paths(&path_var) {
+            if dir.join(name).exists() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Version instalada de un componente del catalogo.
 ///
-/// GekkoApp todavia puede estar instalada por `scripts/install.sh` (sin
-/// registro en el estado del motor), asi que se reporta la version del binario
-/// en ejecucion como version instalada.
+/// Primero consulta el estado interno (`installations-v1.json`). Si no esta
+/// registrado (por ejemplo, si Bauh o Gekko ADB fueron instalados por pipx,
+/// por curl o previo a GekkoApp), realiza una comprobacion en vivo del binario
+/// en `~/.local/bin` o PATH en Arch, Garuda y Solus.
 fn installed_version_of(
     installed: &BTreeMap<String, String>,
     component: CatalogComponent,
 ) -> Option<String> {
-    if component.id() == crate::core::catalog::GEKKOAPP_PRODUCT_ID
-        && !installed.contains_key(crate::core::catalog::GEKKOAPP_PRODUCT_ID)
-    {
-        return Some(env!("CARGO_PKG_VERSION").to_string());
+    if let Some(version) = installed.get(component.id()) {
+        return Some(version.clone());
     }
-    installed.get(component.id()).cloned()
+
+    let Ok(paths) = InstallPaths::detect() else {
+        return None;
+    };
+
+    match component {
+        CatalogComponent::BauhFork => {
+            let launcher = paths.bin_home.join("bauh");
+            if launcher.exists() || is_binary_in_path("bauh") {
+                let (_, version_output) =
+                    crate::core::system::run_shell_piped("bauh --version 2>/dev/null");
+                let v = version_output.trim();
+                if let Some(ver) = v.strip_prefix("bauh ") {
+                    let ver = ver.trim();
+                    if !ver.is_empty() {
+                        return Some(ver.to_string());
+                    }
+                }
+                if !v.is_empty() {
+                    return Some(v.to_string());
+                }
+                return Some("instalado".to_string());
+            }
+            None
+        }
+        CatalogComponent::GekkoAdb => {
+            let launcher = paths.bin_home.join("gekko-adb");
+            let app_dir = paths.data_home.join("gekko-adb/app");
+            if launcher.exists() || app_dir.exists() || is_binary_in_path("gekko-adb") {
+                if app_dir.join(".git").exists() {
+                    let (_, rev) = crate::core::system::run_shell_piped(&format!(
+                        "git -C {} rev-parse --short HEAD 2>/dev/null",
+                        crate::core::system::sh_quote(&app_dir)
+                    ));
+                    let rev = rev.trim();
+                    if !rev.is_empty() {
+                        return Some(rev.to_string());
+                    }
+                }
+                return Some("instalado".to_string());
+            }
+            None
+        }
+
+        CatalogComponent::GekkoApp => Some(env!("CARGO_PKG_VERSION").to_string()),
+        CatalogComponent::Kito(kito_comp) => {
+            let binary_name = match kito_comp {
+                ComponentId::Compositor => "kitsune-compositor",
+                ComponentId::Kiui => "kiui",
+                ComponentId::Kitowall => "kitowall",
+                ComponentId::Kilivepaper => "kilivepaper",
+                ComponentId::Kisddm => "kisddm",
+            };
+            let launcher = paths.bin_home.join(binary_name);
+            if launcher.exists() || is_binary_in_path(binary_name) {
+                return Some("instalado".to_string());
+            }
+            None
+        }
+    }
 }
 
 #[tauri::command]
@@ -206,7 +278,10 @@ fn catalog_state() -> CatalogView {
                 product_id: component.product_id(),
                 label: component.label(),
                 mandatory: matches!(component, ComponentId::Compositor | ComponentId::Kiui),
-                installed_version: installed.get(component.product_id()).cloned(),
+                installed_version: installed_version_of(
+                    &installed,
+                    CatalogComponent::Kito(component),
+                ),
             }),
             CatalogComponent::BauhFork
             | CatalogComponent::GekkoAdb
@@ -214,10 +289,13 @@ fn catalog_state() -> CatalogView {
         })
         .collect();
 
+
     let target = environment.target();
 
     CatalogView {
+        distro_id: environment.distro_id,
         distro_name: environment.distro_name,
+        package_manager: environment.package_manager,
         session: environment.session,
         desktop: environment.desktop,
         target,
@@ -225,6 +303,7 @@ fn catalog_state() -> CatalogView {
         items,
         kito_modules,
     }
+
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -511,6 +590,86 @@ fn theme_state() -> crate::core::theme::MatugenPalette {
     crate::core::theme::detect_palette()
 }
 
+#[tauri::command]
+async fn uninstall_kito(app: AppHandle) -> Result<(), String> {
+    let reporter = GuiReporter { app };
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::core::flow::uninstall_kito_environment(&reporter)
+    })
+    .await
+    .map_err(|error| format!("Error al desinstalar Kito: {error}"))?
+}
+
+#[tauri::command]
+async fn uninstall_bauh(app: AppHandle) -> Result<(), String> {
+    let reporter = GuiReporter { app };
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::core::flow::uninstall_bauh(&reporter)
+    })
+    .await
+    .map_err(|error| format!("Error al desinstalar Bauh: {error}"))?
+}
+
+#[tauri::command]
+async fn uninstall_gekko_adb(app: AppHandle) -> Result<(), String> {
+    let reporter = GuiReporter { app };
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::core::flow::uninstall_gekko_adb(&reporter)
+    })
+    .await
+    .map_err(|error| format!("Error al desinstalar Gekko ADB Studio: {error}"))?
+}
+
+#[tauri::command]
+async fn uninstall_terminal(app: AppHandle) -> Result<(), String> {
+    let reporter = GuiReporter { app };
+    tauri::async_runtime::spawn_blocking(move || {
+        if crate::core::flow::uninstall_zsh_starship(&reporter) {
+            Ok(())
+        } else {
+            Err("Error al desinstalar Terminal Bonita.".to_string())
+        }
+    })
+    .await
+    .map_err(|error| format!("Error en la tarea: {error}"))?
+}
+
+#[tauri::command]
+async fn uninstall_hyprland(app: AppHandle, password: Option<String>) -> Result<(), String> {
+    run_gui_install(app, password, |reporter| {
+        if crate::core::flow::uninstall_hyprland(reporter) {
+            Ok(())
+        } else {
+            Err("Error al desinstalar preset Hyprland.".to_string())
+        }
+    })
+    .await
+}
+
+#[tauri::command]
+async fn uninstall_niri(app: AppHandle, password: Option<String>) -> Result<(), String> {
+    run_gui_install(app, password, |reporter| {
+        if crate::core::flow::uninstall_niri(reporter) {
+            Ok(())
+        } else {
+            Err("Error al desinstalar preset Niri.".to_string())
+        }
+    })
+    .await
+}
+
+#[tauri::command]
+async fn uninstall_gaming_setup(app: AppHandle, password: Option<String>) -> Result<(), String> {
+    run_gui_install(app, password, |reporter| {
+        if crate::core::flow::uninstall_gaming(reporter) {
+            Ok(())
+        } else {
+            Err("Error al desinstalar Gaming Setup.".to_string())
+        }
+    })
+    .await
+}
+
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
@@ -534,10 +693,18 @@ pub fn run() {
             install_niri,
             install_gaming_setup,
             install_chaotic_aur,
+            uninstall_kito,
+            uninstall_bauh,
+            uninstall_gekko_adb,
+            uninstall_terminal,
+            uninstall_hyprland,
+            uninstall_niri,
+            uninstall_gaming_setup,
             theme_state
         ])
         .run(tauri::generate_context!())
         .expect("error al ejecutar la interfaz GekkoApp");
+
 }
 
 #[cfg(test)]

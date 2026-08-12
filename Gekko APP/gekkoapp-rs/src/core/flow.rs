@@ -1,7 +1,7 @@
 use crate::core::reporter::{Reporter, BOLD, DIM, FG_CYAN, FG_GREEN, FG_RED, FG_YELLOW, RESET};
 use crate::core::system::{
     check_arch_linux, configurar_fastfetch, desinstalar_paquetes, instalar_paquetes,
-    is_package_installed, print_detected_environment, run_shell, run_shell_piped,
+    is_package_installed, is_solus_linux, print_detected_environment, run_shell, run_shell_piped,
 };
 use crate::environment::SystemEnvironment;
 use crate::installer::{InstallPaths, InstallationPlan};
@@ -17,8 +17,29 @@ pub fn install_zsh_starship(reporter: &dyn Reporter) -> bool {
     reporter.header("INSTALANDO ZSH Y TERMINAL BONITA  (by GekkoApp)");
     thread::sleep(Duration::from_millis(500));
 
-    if !instalar_paquetes(
-        reporter,
+    let solus = is_solus_linux();
+    if !check_arch_linux() && !solus {
+        reporter.err("El preset de terminal solo esta disponible en Arch Linux y Solus.");
+        return false;
+    }
+
+    let packages: &[&str] = if solus {
+        &[
+            "kitty",
+            "git",
+            "zsh",
+            "nano",
+            "curl",
+            "eza",
+            "fastfetch",
+            "fzf",
+            "font-firacode-nerd",
+            "starship",
+            "zsh-autosuggestions",
+            "zsh-syntax-highlighting",
+            "zoxide",
+        ]
+    } else {
         &[
             "kitty",
             "git",
@@ -35,8 +56,9 @@ pub fn install_zsh_starship(reporter: &dyn Reporter) -> bool {
             "zsh-history-substring-search",
             "zsh-completions",
             "zoxide",
-        ],
-    ) {
+        ]
+    };
+    if !instalar_paquetes(reporter, packages) {
         reporter.err("Fallo la instalación de dependencias base y plugins de ZSH.");
         return false;
     }
@@ -45,85 +67,7 @@ pub fn install_zsh_starship(reporter: &dyn Reporter) -> bool {
         reporter.warn("Fallo al actualizar caché de fuentes (fc-cache).");
     }
 
-    let zshrc = r#"# =====================================
-# HISTORIAL
-# =====================================
-
-HISTFILE=~/.zsh_history
-HISTSIZE=100000
-SAVEHIST=100000
-
-setopt APPEND_HISTORY
-setopt INC_APPEND_HISTORY
-setopt SHARE_HISTORY
-setopt HIST_IGNORE_ALL_DUPS
-setopt HIST_IGNORE_SPACE
-setopt HIST_REDUCE_BLANKS
-setopt HIST_VERIFY
-
-# =====================================
-# COMPLETION
-# =====================================
-
-autoload -Uz compinit
-fpath=(/usr/share/zsh/plugins/zsh-completions/src $fpath)
-compinit -d ~/.zcompdump
-
-zstyle ':completion:*' matcher-list 'm:{a-z}={A-Za-z}' 'r:|[._-]=* r:|=*'
-
-setopt AUTO_MENU
-setopt COMPLETE_IN_WORD
-setopt ALWAYS_TO_END
-
-# =====================================
-# ALIASES
-# =====================================
-
-alias l='eza -l --icons --color=auto --group-directories-first'
-alias ls='eza --icons --color=auto --group-directories-first'
-alias ll='eza -l --icons --color=auto --group-directories-first'
-alias la='eza -la --icons --color=auto --group-directories-first'
-alias lt='eza --tree --icons --color=auto --group-directories-first'
-
-# =====================================
-# PROMPT
-# =====================================
-
-eval "$(starship init zsh)"
-
-# =====================================
-# PLUGINS
-# =====================================
-
-source /usr/share/zsh/plugins/zsh-autosuggestions/zsh-autosuggestions.zsh
-source /usr/share/zsh/plugins/zsh-history-substring-search/zsh-history-substring-search.zsh
-bindkey '^[[A' history-substring-search-up
-bindkey '^[[B' history-substring-search-down
-source /usr/share/fzf/key-bindings.zsh
-source /usr/share/fzf/completion.zsh
-source /usr/share/zsh/plugins/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
-eval "$(zoxide init zsh)"
-
-# =====================================
-# KEYBINDINGS
-# =====================================
-
-stty -ixon
-
-bindkey '^Q' kill-whole-line
-bindkey '^U' backward-kill-line
-bindkey '^K' kill-line
-bindkey '^[[1;5C' forward-word
-bindkey '^[[1;5D' backward-word
-
-# =====================================
-# FASTFETCH SOLO INTERACTIVO (by The-Gekko)
-# =====================================
-
-[[ $- == *i* ]] && fastfetch
-
-# ZSH Config by iBlueMoon
-"#;
+    let zshrc = build_zshrc(solus);
 
     let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
     let zshrc_path = format!("{}/.zshrc", home);
@@ -190,8 +134,117 @@ bindkey '^[[1;5D' backward-word
     true
 }
 
+/// Construye el `~/.zshrc` con las rutas de plugins validas para la distro.
+///
+/// Arch Linux: zsh-completions + history-substring-search y plugins bajo
+/// `/usr/share/zsh/plugins/`. Solus: las rutas difieren
+/// (`/usr/share/zsh-autosuggestions/`, fzf en `/usr/share/zsh/site-functions/`
+/// y zsh-syntax-highlighting en `site-functions`); history-substring-search y
+/// zsh-completions no estan empaquetados en los repos de Solus.
+fn build_zshrc(solus: bool) -> String {
+    let fpath_line = if solus {
+        "fpath=(/usr/share/zsh/site-functions $fpath)"
+    } else {
+        "fpath=(/usr/share/zsh/plugins/zsh-completions/src $fpath)"
+    };
+    let plugins = if solus {
+        "source /usr/share/zsh-autosuggestions/zsh-autosuggestions.zsh\n\
+         source /usr/share/fzf/key-bindings.zsh\n\
+         source /usr/share/zsh/site-functions/zsh-syntax-highlighting.zsh"
+    } else {
+        "source /usr/share/zsh/plugins/zsh-autosuggestions/zsh-autosuggestions.zsh\n\
+         source /usr/share/zsh/plugins/zsh-history-substring-search/zsh-history-substring-search.zsh\n\
+         bindkey '^[[A' history-substring-search-up\n\
+         bindkey '^[[B' history-substring-search-down\n\
+         source /usr/share/fzf/key-bindings.zsh\n\
+         source /usr/share/fzf/completion.zsh\n\
+         source /usr/share/zsh/plugins/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh"
+    };
+    format!(
+        r#"# =====================================
+# HISTORIAL
+# =====================================
+
+HISTFILE=~/.zsh_history
+HISTSIZE=100000
+SAVEHIST=100000
+
+setopt APPEND_HISTORY
+setopt INC_APPEND_HISTORY
+setopt SHARE_HISTORY
+setopt HIST_IGNORE_ALL_DUPS
+setopt HIST_IGNORE_SPACE
+setopt HIST_REDUCE_BLANKS
+setopt HIST_VERIFY
+
+# =====================================
+# COMPLETION
+# =====================================
+
+autoload -Uz compinit
+{fpath_line}
+compinit -d ~/.zcompdump
+
+zstyle ':completion:*' matcher-list 'm:{{a-z}}={{A-Za-z}}' 'r:|[._-]=* r:|=*'
+
+setopt AUTO_MENU
+setopt COMPLETE_IN_WORD
+setopt ALWAYS_TO_END
+
+# =====================================
+# ALIASES
+# =====================================
+
+alias l='eza -l --icons --color=auto --group-directories-first'
+alias ls='eza --icons --color=auto --group-directories-first'
+alias ll='eza -l --icons --color=auto --group-directories-first'
+alias la='eza -la --icons --color=auto --group-directories-first'
+alias lt='eza --tree --icons --color=auto --group-directories-first'
+
+# =====================================
+# PROMPT
+# =====================================
+
+eval "$(starship init zsh)"
+
+# =====================================
+# PLUGINS
+# =====================================
+
+{plugins}
+eval "$(zoxide init zsh)"
+
+# =====================================
+# KEYBINDINGS
+# =====================================
+
+stty -ixon
+
+bindkey '^Q' kill-whole-line
+bindkey '^U' backward-kill-line
+bindkey '^K' kill-line
+bindkey '^[[1;5C' forward-word
+bindkey '^[[1;5D' backward-word
+
+# =====================================
+# FASTFETCH SOLO INTERACTIVO (by The-Gekko)
+# =====================================
+
+[[ $- == *i* ]] && fastfetch
+
+# ZSH Config by iBlueMoon
+"#,
+        fpath_line = fpath_line,
+        plugins = plugins,
+    )
+}
+
 pub fn install_hyprland(reporter: &dyn Reporter) -> bool {
     reporter.header("INSTALANDO PRESET HYPRLAND");
+    if !check_arch_linux() {
+        reporter.err("El preset Hyprland solo esta disponible en Arch Linux y derivadas.");
+        return false;
+    }
     if !instalar_paquetes(
         reporter,
         &[
@@ -233,6 +286,10 @@ pub fn install_hyprland(reporter: &dyn Reporter) -> bool {
 
 pub fn install_niri(reporter: &dyn Reporter) -> bool {
     reporter.header("INSTALANDO PRESET NIRI");
+    if !check_arch_linux() {
+        reporter.err("El preset Niri solo esta disponible en Arch Linux y derivadas.");
+        return false;
+    }
     if !instalar_paquetes(
         reporter,
         &[
@@ -288,8 +345,9 @@ pub fn install_gaming(reporter: &dyn Reporter, gpu: &str, vulkan_choice: &str) -
     };
     reporter.header(label);
 
-    if !check_arch_linux() {
-        reporter.err("El sistema no es Arch Linux. Cancelando.");
+    let solus = is_solus_linux();
+    if !check_arch_linux() && !solus {
+        reporter.err("El sistema no es Arch Linux ni Solus. Cancelando.");
         return false;
     }
 
@@ -298,6 +356,10 @@ pub fn install_gaming(reporter: &dyn Reporter, gpu: &str, vulkan_choice: &str) -
         gpu.to_uppercase()
     )) {
         return false;
+    }
+
+    if solus {
+        return install_gaming_solus(reporter);
     }
 
     reporter.info("Instalando steam...");
@@ -359,6 +421,43 @@ pub fn install_gaming(reporter: &dyn Reporter, gpu: &str, vulkan_choice: &str) -
     true
 }
 
+/// Variante del flujo gaming para Solus: usa eopkg, paquetes multilib
+/// (`gstreamer-1.0-32bit`, `gstreamer-1.0-plugins-base-32bit`) y omite
+/// Proton GE / DXVK / protonplus / spotify, que no existen en los repos
+/// de Solus (se deja indicado instalar ProtonUp-Qt por Flatpak).
+fn install_gaming_solus(reporter: &dyn Reporter) -> bool {
+    reporter.info("Instalando Steam (Solus)...");
+    if !instalar_paquetes(reporter, &["steam"]) {
+        reporter.warn("Steam no se pudo instalar correctamente o fue cancelado.");
+        return false;
+    }
+
+    reporter.info("Instalando librerias 32-bit y Flatpak...");
+    if !instalar_paquetes(
+        reporter,
+        &[
+            "gstreamer-1.0-32bit",
+            "gstreamer-1.0-plugins-base-32bit",
+            "flatpak",
+        ],
+    ) {
+        reporter.warn("Fallo al instalar las dependencias 32-bit de Solus.");
+        return false;
+    }
+
+    reporter.info("Instalando herramientas gaming...");
+    if !instalar_paquetes(reporter, &["gamemode", "discord", "gedit", "mangohud"]) {
+        reporter.warn("Fallo al instalar algunas herramientas gaming de Solus.");
+        return false;
+    }
+
+    reporter.info("Solus no empaqueta Proton GE, DXVK ni protonplus en sus repositorios.");
+    reporter.info("Instala ProtonUp-Qt (Flatpak) y usalo para gestionar Proton GE.");
+    reporter.ok("¡Proceso de instalación Gaming terminado!");
+    thread::sleep(Duration::from_secs(2));
+    true
+}
+
 /// Instala o actualiza Bauh Fork (The-Gekko) desde GitHub Releases.
 ///
 /// El release se publica con un manifiesto firmado (SHA-256) que declara el
@@ -373,11 +472,19 @@ pub fn install_bauh(
 ) -> Result<(), String> {
     reporter.header("INSTALANDO TIENDA BAUH FORK (THE-GEKKO)");
 
+    let solus = is_solus_linux();
+    if !check_arch_linux() && !solus {
+        return Err("La tienda Bauh Fork solo esta disponible en Arch Linux y Solus.".to_owned());
+    }
+
     let target = environment
         .target()
         .ok_or_else(|| "No existe un target de release para esta arquitectura.".to_owned())?;
 
     if is_package_installed("bauh") {
+        if solus {
+            return Err("Bauh no se distribuye en los repos de Solus; no hay conflicto.".to_owned());
+        }
         if require_confirmation
             && !reporter.confirm(
                 "¿Deseas desinstalar el bauh original de pacman para evitar conflictos con el fork?",
@@ -390,8 +497,9 @@ pub fn install_bauh(
         }
     }
 
-    if !is_package_installed("python-pipx") && !instalar_paquetes(reporter, &["python-pipx"]) {
-        return Err("No se pudieron instalar las dependencias base (python-pipx).".to_owned());
+    let pipx = if solus { "pipx" } else { "python-pipx" };
+    if !is_package_installed(pipx) && !instalar_paquetes(reporter, &[pipx]) {
+        return Err("No se pudieron instalar las dependencias base (pipx).".to_owned());
     }
 
     reporter.step("Verificando el release mas reciente de Bauh Fork...");
@@ -490,7 +598,12 @@ pub fn install_gekkoapp(
 pub fn install_gekko_adb(reporter: &dyn Reporter) -> Result<(), String> {
     reporter.header("INSTALANDO GEKKO ADB STUDIO (THE-GEKKO)");
 
-    const DEPS: &[&str] = &[
+    let solus = is_solus_linux();
+    if !check_arch_linux() && !solus {
+        return Err("Gekko ADB Studio solo esta disponible en Arch Linux y Solus.".to_owned());
+    }
+
+    const DEPS_ARCH: &[&str] = &[
         "git",
         "python",
         "python-gobject",
@@ -501,7 +614,22 @@ pub fn install_gekko_adb(reporter: &dyn Reporter) -> Result<(), String> {
         "glib2",
         "xdg-utils",
     ];
-    if !instalar_paquetes(reporter, DEPS) {
+    let deps: &[&str] = if solus {
+        &[
+            "git",
+            "python-3",
+            "python-gobject",
+            "gtk-3",
+            "gtk-4",
+            "android-tools",
+            "scrcpy",
+            "glib-2",
+            "xdg-utils",
+        ]
+    } else {
+        DEPS_ARCH
+    };
+    if !instalar_paquetes(reporter, deps) {
         return Err("No se pudieron instalar las dependencias de Gekko ADB Studio.".to_owned());
     }
 
@@ -790,3 +918,103 @@ pub fn install_kito_environment(reporter: &dyn Reporter) {
         }
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Desinstaladores
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Desinstala Bauh Fork (The-Gekko).
+pub fn uninstall_bauh(reporter: &dyn Reporter) -> Result<(), String> {
+    reporter.header("DESINSTALANDO TIENDA BAUH FORK");
+    let paths = InstallPaths::detect()?;
+    let launcher = paths.bin_home.join("bauh");
+    if launcher.exists() || is_package_installed("bauh-fork-the-gekko") {
+        reporter.step("Ejecutando pipx uninstall...");
+        let _ = run_shell("pipx uninstall bauh-fork-the-gekko");
+        let _ = run_shell("pipx uninstall bauh");
+    }
+    crate::installer::uninstall_registered_module(crate::core::catalog::BAUH_PRODUCT_ID)?;
+    reporter.ok("Bauh Fork desinstalado correctamente.");
+    thread::sleep(Duration::from_secs(1));
+    Ok(())
+}
+
+/// Desinstala Gekko ADB Studio.
+pub fn uninstall_gekko_adb(reporter: &dyn Reporter) -> Result<(), String> {
+    reporter.header("DESINSTALANDO GEKKO ADB STUDIO");
+    let paths = InstallPaths::detect()?;
+    let launcher = paths.bin_home.join("gekko-adb");
+    if launcher.exists() || fs::symlink_metadata(&launcher).is_ok() {
+        let _ = fs::remove_file(&launcher);
+    }
+    let app_desktop = paths.data_home.join("applications/com.gekko.adb.desktop");
+    if app_desktop.exists() {
+        let _ = fs::remove_file(&app_desktop);
+    }
+    let legacy_desktop = paths.data_home.join("applications/org.thegekko.gekko_adb.desktop");
+    if legacy_desktop.exists() {
+        let _ = fs::remove_file(&legacy_desktop);
+    }
+    let icon_file = paths.data_home.join("icons/hicolor/512x512/apps/gekko-adb.png");
+    if icon_file.exists() {
+        let _ = fs::remove_file(&icon_file);
+    }
+    let gekko_adb_app_data = paths.data_home.join("gekko-adb");
+    if gekko_adb_app_data.exists() {
+        let _ = fs::remove_dir_all(&gekko_adb_app_data);
+    }
+    crate::installer::uninstall_registered_module(crate::core::catalog::GEKKO_ADB_PRODUCT_ID)?;
+    reporter.ok("Gekko ADB Studio desinstalado correctamente.");
+    thread::sleep(Duration::from_secs(1));
+    Ok(())
+}
+
+
+/// Desinstala los modulos de Kito registrados.
+pub fn uninstall_kito_environment(reporter: &dyn Reporter) -> Result<(), String> {
+    reporter.header("DESINSTALANDO ENTORNO KITO");
+    for id in ["kitsune-compositor", "kiui", "kitowall", "kilivepaper", "kisddm"] {
+        let _ = crate::installer::uninstall_registered_module(id);
+    }
+    reporter.ok("Entorno Kito desinstalado correctamente.");
+    thread::sleep(Duration::from_secs(1));
+    Ok(())
+}
+
+/// Desinstala Terminal Bonita (.zshrc).
+pub fn uninstall_zsh_starship(reporter: &dyn Reporter) -> bool {
+    reporter.header("DESINSTALANDO TERMINAL BONITA");
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+    let zshrc_path = format!("{}/.zshrc", home);
+    if std::path::Path::new(&zshrc_path).exists() {
+        let _ = std::fs::remove_file(&zshrc_path);
+        reporter.ok("Se ha eliminado el .zshrc configurado por GekkoApp.");
+    }
+    true
+}
+
+/// Desinstala preset Hyprland.
+pub fn uninstall_hyprland(reporter: &dyn Reporter) -> bool {
+    reporter.header("DESINSTALANDO PRESET HYPRLAND");
+    reporter.info("Eliminando dependencias especificas del preset...");
+    desinstalar_paquetes(reporter, &["wofi", "dolphin"])
+}
+
+/// Desinstala preset Niri.
+pub fn uninstall_niri(reporter: &dyn Reporter) -> bool {
+    reporter.header("DESINSTALANDO PRESET NIRI");
+    reporter.info("Eliminando dependencias especificas del preset...");
+    desinstalar_paquetes(reporter, &["niri", "mako"])
+}
+
+/// Desinstala preset Gaming.
+pub fn uninstall_gaming(reporter: &dyn Reporter) -> bool {
+    reporter.header("DESINSTALANDO GAMING SETUP");
+    let packages = if is_solus_linux() {
+        vec!["gamemode", "mangohud"]
+    } else {
+        vec!["gamemode", "mangohud", "protonup-qt"]
+    };
+    desinstalar_paquetes(reporter, &packages)
+}
+

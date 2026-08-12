@@ -46,6 +46,13 @@ function render() {
     (env.compatible ? "" : " · NO COMPATIBLE");
   $("env").textContent = envText;
 
+  if (env.distroId === "solus" || env.packageManager === "eopkg") {
+    $("hyprland-card")?.classList.add("hidden");
+    $("niri-card")?.classList.add("hidden");
+    $("chaotic-card")?.classList.add("hidden");
+  }
+
+
   const mandatory = catalog.kitoModules.filter((m) => m.mandatory);
   const optional = catalog.kitoModules.filter((m) => !m.mandatory);
   const installedMandatory = mandatory.filter((m) => m.installedVersion);
@@ -350,6 +357,35 @@ async function init() {
   $("chaotic-install").addEventListener("click", () => {
     runInstall("install_chaotic_aur", { password: $("chaotic-pass").value });
   });
+
+  $("kito-uninstall")?.addEventListener("click", () => {
+    runInstall("uninstall_kito", {});
+  });
+
+  $("bauh-uninstall")?.addEventListener("click", () => {
+    runInstall("uninstall_bauh", {});
+  });
+
+  $("gekko-adb-uninstall")?.addEventListener("click", () => {
+    runInstall("uninstall_gekko_adb", {});
+  });
+
+  $("terminal-uninstall")?.addEventListener("click", () => {
+    runInstall("uninstall_terminal", {});
+  });
+
+  $("hyprland-uninstall")?.addEventListener("click", () => {
+    runInstall("uninstall_hyprland", { password: $("hyprland-pass").value });
+  });
+
+  $("niri-uninstall")?.addEventListener("click", () => {
+    runInstall("uninstall_niri", { password: $("niri-pass").value });
+  });
+
+  $("gaming-uninstall")?.addEventListener("click", () => {
+    runInstall("uninstall_gaming_setup", { password: $("gaming-pass").value });
+  });
+
 
   $("bell-toggle").addEventListener("click", (event) => {
     event.stopPropagation();

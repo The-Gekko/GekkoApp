@@ -2,9 +2,12 @@
 
 use gekkoapp::core::flow::{
     install_bauh, install_gaming, install_gekko_adb, install_gekkoapp, install_hyprland,
-    install_kito_environment, install_niri, install_zsh_starship,
+    install_kito_environment, install_niri, install_zsh_starship, uninstall_bauh,
+    uninstall_gaming, uninstall_gekko_adb, uninstall_hyprland, uninstall_kito_environment,
+    uninstall_niri, uninstall_zsh_starship,
 };
 use gekkoapp::core::pacman::install_chaotic_aur;
+
 use gekkoapp::core::reporter::{BOLD, DIM, FG_CYAN, FG_GREEN, FG_MAGENTA, FG_RED, FG_WHITE, RESET};
 use gekkoapp::core::{CliReporter, Reporter};
 use gekkoapp::environment::SystemEnvironment;
@@ -36,7 +39,7 @@ fn press_enter_to_continue(reporter: &dyn Reporter) {
 //  ASCII art banner
 // ─────────────────────────────────────────────────────────────────────────────
 
-fn print_banner() {
+fn print_banner(env: &SystemEnvironment) {
     clear_screen();
 
     let bar_colors = [
@@ -98,7 +101,10 @@ fn print_banner() {
         pad = 0
     );
 
-    let by_line = "Arch Linux ❱ Automated Setup ❱ Powered by Rust";
+    let by_line = format!(
+        "{} ❱ Automated Setup ({}) ❱ Powered by Rust",
+        env.distro_name, env.package_manager
+    );
     println!(
         "  {}{}|  {}{}{}{}",
         FG_CYAN, BOLD, DIM, FG_CYAN, by_line, RESET
@@ -112,6 +118,7 @@ fn print_banner() {
     }
     println!("{}\n", RESET);
 }
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Menu
@@ -193,12 +200,19 @@ fn print_menu() {
             badge: Some(("NUEVO", FG_MAGENTA)),
         },
         MenuItem {
+            key: "d",
+            icon: "🗑️ ",
+            label: "Desinstalar componentes   (Submenú de desinstalación)",
+            badge: Some(("DESINSTALADOR", FG_RED)),
+        },
+        MenuItem {
             key: "0",
             icon: "❌",
             label: "Salir",
             badge: None,
         },
     ];
+
 
     println!(
         "  {}{}Selecciona una opción para configurar tu entorno:{}",
@@ -227,11 +241,39 @@ fn print_menu() {
     let _ = io::stdout().flush();
 }
 
+fn run_uninstall_menu(reporter: &dyn Reporter) {
+    println!();
+    println!("  {}{}--- MENÚ DE DESINSTALACIÓN ---{}", FG_WHITE, BOLD, RESET);
+    println!("  {}[1]{} Desinstalar Tienda Bauh Fork", FG_CYAN, RESET);
+    println!("  {}[2]{} Desinstalar Gekko ADB Studio", FG_CYAN, RESET);
+    println!("  {}[3]{} Desinstalar Entorno Kito", FG_CYAN, RESET);
+    println!("  {}[4]{} Desinstalar Terminal Bonita", FG_CYAN, RESET);
+    println!("  {}[5]{} Desinstalar Preset Hyprland", FG_CYAN, RESET);
+    println!("  {}[6]{} Desinstalar Preset Niri", FG_CYAN, RESET);
+    println!("  {}[7]{} Desinstalar Gaming Setup", FG_CYAN, RESET);
+    println!("  {}[0]{} Cancelar", FG_RED, RESET);
+    println!();
+    print!("  {}{}Selecciona el componente a desinstalar:{} ", FG_WHITE, BOLD, RESET);
+    let _ = io::stdout().flush();
+
+    let choice = read_line();
+    match choice.as_str() {
+        "1" => { let _ = uninstall_bauh(reporter); }
+        "2" => { let _ = uninstall_gekko_adb(reporter); }
+        "3" => { let _ = uninstall_kito_environment(reporter); }
+        "4" => { uninstall_zsh_starship(reporter); }
+        "5" => { uninstall_hyprland(reporter); }
+        "6" => { uninstall_niri(reporter); }
+        "7" => { uninstall_gaming(reporter); }
+        _ => { reporter.info("Desinstalación cancelada."); }
+    }
+}
+
 fn main() {
     let reporter = CliReporter;
     let environment = SystemEnvironment::detect();
     loop {
-        print_banner();
+        print_banner(&environment);
         print_menu();
 
         let option = read_line();
@@ -290,6 +332,10 @@ fn main() {
                 }
                 press_enter_to_continue(&reporter);
             }
+            "d" | "D" => {
+                run_uninstall_menu(&reporter);
+                press_enter_to_continue(&reporter);
+            }
             "0" => {
                 println!();
                 reporter.info("Saliendo de GekkoApp. ¡Hasta luego! 🐉");
@@ -303,3 +349,4 @@ fn main() {
         }
     }
 }
+

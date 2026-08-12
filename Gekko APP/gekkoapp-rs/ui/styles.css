@@ -145,6 +145,10 @@ body {
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 18px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
 }
 
 .card.wide {
@@ -228,12 +232,15 @@ body {
 
 .actions {
   display: flex;
-  gap: 10px;
+  flex-wrap: wrap;
+  gap: 8px;
   margin-top: 14px;
 }
 
-.actions input[type="password"] {
-  flex: 1;
+.actions input[type="password"],
+.actions select.gpu-select {
+  flex: 1 1 100%;
+  width: 100%;
   background: var(--panel-2);
   border: 1px solid var(--border);
   color: var(--text);
@@ -242,25 +249,15 @@ body {
   font-family: inherit;
 }
 
-.actions input[type="password"]:focus {
+.actions input[type="password"]:focus,
+.actions select.gpu-select:focus {
   outline: none;
   border-color: var(--accent);
 }
 
 .gpu-select {
-  background: var(--panel-2);
-  border: 1px solid var(--border);
-  color: var(--text);
-  border-radius: 8px;
-  padding: 10px 12px;
-  font-family: inherit;
   font-weight: 700;
   cursor: pointer;
-}
-
-.gpu-select:focus {
-  outline: none;
-  border-color: var(--accent);
 }
 
 .theme-swatches {
@@ -277,21 +274,33 @@ body {
   box-sizing: border-box;
 }
 
-.actions input[type="password"]:focus {
-  outline: none;
-  border-color: var(--accent);
-}
-
 button {
+  flex: 1 1 calc(50% - 4px);
+  min-width: 0;
   background: var(--accent);
   color: #0c1220;
   border: none;
   border-radius: 8px;
-  padding: 10px 18px;
+  padding: 10px 8px;
   font-family: inherit;
   font-weight: 700;
+  font-size: 13px;
+  text-align: center;
+  white-space: nowrap;
   cursor: pointer;
   transition: filter 0.15s;
+}
+
+button.btn-danger {
+  background: var(--panel-2);
+  color: var(--red);
+  border: 1px solid var(--red);
+}
+
+button.btn-danger:hover:not(:disabled) {
+  background: var(--red);
+  color: #fff;
+  filter: none;
 }
 
 button:hover:not(:disabled) {
@@ -302,6 +311,7 @@ button:disabled {
   opacity: 0.45;
   cursor: not-allowed;
 }
+
 
 .bar {
   height: 10px;

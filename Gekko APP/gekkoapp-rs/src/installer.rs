@@ -1096,6 +1096,31 @@ pub(crate) fn record_source_module(
     write_state(&paths.state_file(), &state)
 }
 
+/// Desinstala un modulo registrado limpiando sus owned_paths, active_root si
+/// pertenece a kitotsu, y removiendolo del estado.
+pub fn uninstall_registered_module(module_id: &str) -> Result<(), String> {
+    let paths = InstallPaths::detect()?;
+    let state_file = paths.state_file();
+    let mut state = load_state(&state_file)?;
+
+    if let Some(module) = state.modules.remove(module_id) {
+        for owned in &module.owned_paths {
+            let p = Path::new(&owned.path);
+            if p.exists() || fs::symlink_metadata(p).is_ok() {
+                let _ = fs::remove_file(p);
+            }
+        }
+        let root = Path::new(&module.active_root);
+        if root.starts_with(&paths.versions_home) && root.exists() {
+            let _ = fs::remove_dir_all(root);
+        }
+        write_state(&state_file, &state)?;
+    }
+
+    Ok(())
+}
+
+
 fn validate_manifest(
     manifest: &ArtifactManifest,
     component_label: &str,

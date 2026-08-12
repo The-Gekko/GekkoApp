@@ -26,11 +26,26 @@ pub fn run_shell_piped(cmd: &str) -> (bool, String) {
     }
 }
 
-pub fn is_package_installed(pkg: &str) -> bool {
-    run_shell_piped(&format!("pacman -Qq '{pkg}' 2>/dev/null")).0
+pub fn sh_quote(path: &Path) -> String {
+    format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
 }
 
-/// Prefijo de sudo para los comandos de pacman.
+
+pub fn is_package_installed(pkg: &str) -> bool {
+    if check_arch_linux() {
+        run_shell_piped(&format!("pacman -Qq '{pkg}' 2>/dev/null")).0
+    } else if is_solus_linux() {
+        run_shell_piped(&format!(
+            "eopkg list-installed 2>/dev/null | awk '{{print $1}}' | grep -qx '{}'",
+            pkg
+        ))
+        .0
+    } else {
+        false
+    }
+}
+
+/// Prefijo de sudo para los comandos del gestor de paquetes.
 ///
 /// La GUI establece `GEKKOAPP_ASKPASS` (y `SUDO_ASKPASS`) apuntando a un
 /// helper askpass temporal; en ese caso sudo lee la contrasena sin TTY. En el
@@ -47,9 +62,28 @@ pub fn check_arch_linux() -> bool {
     Path::new("/etc/arch-release").exists()
 }
 
+pub fn is_solus_linux() -> bool {
+    if Path::new("/etc/solus-release").exists() {
+        return true;
+    }
+    let os_release = std::fs::read_to_string("/etc/os-release").unwrap_or_default();
+    os_release.lines().any(|line| {
+        let line = line.trim();
+        line == "ID=solus"
+            || line
+                .strip_prefix("ID_LIKE=")
+                .is_some_and(|ids| ids.split_whitespace().any(|id| id == "solus"))
+    })
+}
+
+/// ¿Hay un gestor de paquetes soportado (pacman o eopkg) para operar?
+fn has_supported_package_manager() -> bool {
+    check_arch_linux() || is_solus_linux()
+}
+
 pub fn instalar_paquetes(reporter: &dyn Reporter, paquetes: &[&str]) -> bool {
-    if !check_arch_linux() {
-        reporter.err("El sistema no es Arch Linux. No se pueden instalar paquetes con pacman.");
+    if !has_supported_package_manager() {
+        reporter.err("El sistema no es Arch Linux ni Solus. No se pueden instalar paquetes.");
         return false;
     }
 
@@ -78,11 +112,19 @@ pub fn instalar_paquetes(reporter: &dyn Reporter, paquetes: &[&str]) -> bool {
     }
 
     let pkg_list = faltantes.join(" ");
-    let cmd = format!(
-        "{} pacman -S --needed --noconfirm {}",
-        sudo_prefix(),
-        pkg_list
-    );
+    let cmd = if check_arch_linux() {
+        format!(
+            "{} pacman -S --needed --noconfirm {}",
+            sudo_prefix(),
+            pkg_list
+        )
+    } else {
+        if !run_shell(&format!("{} eopkg update-repo -y", sudo_prefix())) {
+            reporter.err("No se pudo actualizar la lista de repositorios de Solus (eopkg update-repo).");
+            return false;
+        }
+        format!("{} eopkg install -y {}", sudo_prefix(), pkg_list)
+    };
     reporter.progress("Instalando", 40);
     if !run_shell(&cmd) {
         reporter.err("Algunos paquetes no pudieron instalarse. Revisa la salida anterior.");
@@ -92,7 +134,7 @@ pub fn instalar_paquetes(reporter: &dyn Reporter, paquetes: &[&str]) -> bool {
 }
 
 pub fn desinstalar_paquetes(reporter: &dyn Reporter, paquetes: &[&str]) -> bool {
-    if !check_arch_linux() {
+    if !has_supported_package_manager() {
         return false;
     }
 
@@ -121,7 +163,11 @@ pub fn desinstalar_paquetes(reporter: &dyn Reporter, paquetes: &[&str]) -> bool 
     }
 
     let pkg_list = a_eliminar.join(" ");
-    let cmd = format!("{} pacman -Rns --noconfirm {}", sudo_prefix(), pkg_list);
+    let cmd = if check_arch_linux() {
+        format!("{} pacman -Rns --noconfirm {}", sudo_prefix(), pkg_list)
+    } else {
+        format!("{} eopkg remove -y {}", sudo_prefix(), pkg_list)
+    };
     if !run_shell(&cmd) {
         reporter.err("Error al desinstalar paquetes.");
         return false;
