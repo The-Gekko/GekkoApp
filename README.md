@@ -51,6 +51,7 @@ Esta herramienta automatiza la configuración de tu entorno, evitando tareas ted
 | :------------ | :------------------------------------------------------------------------- |
 | **The-Gekko** | Arquitectura en Rust, Lógica de Sistema y Optimización Gaming.             |
 | **𝓲𝓑𝓵𝓾𝓮𝓜𝓸𝓸𝓷** | Especialista en Shell. Diseño de experiencia Zsh e integración de plugins. |
+| **KitotsuMolina** | Desarrollador del ecosistema Kito (KiUI, Kitsune, Kitowall, Kilivepaper, KiSDDM). |
 
 ---
 
