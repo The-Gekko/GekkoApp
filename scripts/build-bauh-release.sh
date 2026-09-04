@@ -58,7 +58,20 @@ STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 
 ROOT="$PRODUCT_ID-$VERSION"
-ARCHIVE="$PRODUCT_ID-$VERSION.tar.zst"
+# Nombre del artefacto SIN caracteres especiales. GitHub renombra los assets
+# que los llevan (docs de la API: "GitHub renames asset filenames that have
+# special characters, non-alphanumeric characters, and leading or trailing
+# periods") y GekkoApp localiza el asset por el nombre EXACTO que declara el
+# manifiesto: con el `+` de una version local PEP 440 (0.10.8+gekko.1) el
+# release publicado quedaria irresoluble. Solo cambia el nombre del archivo;
+# la version y el tag conservan el `+`.
+ARCHIVE_VERSION="${VERSION//+/.}"
+ARCHIVE="$PRODUCT_ID-$ARCHIVE_VERSION.tar.zst"
+case "$ARCHIVE" in
+  *[!A-Za-z0-9._-]*)
+    echo "error: el nombre del artefacto contiene caracteres que GitHub renombraria: $ARCHIVE" >&2
+    exit 1 ;;
+esac
 MANIFEST_NAME="$PRODUCT_ID-$TARGET.manifest.json"
 
 echo "==> Preparando arbol fuente en $STAGE/$ROOT"

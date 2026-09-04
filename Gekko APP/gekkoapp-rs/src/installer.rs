@@ -272,6 +272,12 @@ pub struct InstalledModule {
     pub entrypoints: BTreeMap<String, String>,
     pub owned_paths: Vec<OwnedPath>,
     pub activated_at_unix: u64,
+    /// Distribucion con la que pipx registro el modulo (solo `python_pipx`).
+    /// Se guarda porque la version anterior puede llamarse distinto a la nueva
+    /// (el fork de Bauh paso de `bauh` a `gekko-bauh`) y hay que poder retirarla
+    /// al actualizar. `default` mantiene legibles los estados ya escritos.
+    #[serde(default)]
+    pub pipx_distribution: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -467,7 +473,7 @@ impl InstallationPlan {
         // los tomaria por "rutas ajenas" y abortaria toda la actualizacion.
         for (release, root) in &installed {
             if release.manifest.install_method == "python_pipx" {
-                remove_previous_pipx_installation(release, root);
+                remove_previous_pipx_installation(release, root, &state);
             }
         }
         validate_activation_destinations(&installed, paths, &state)?;
@@ -894,6 +900,7 @@ fn activate_release(
             entrypoints,
             owned_paths,
             activated_at_unix: now_unix()?,
+            pipx_distribution: None,
         },
     );
     Ok(())
@@ -973,6 +980,7 @@ fn activate_pipx_release(
         )?;
     }
 
+    let pipx_distribution = pipx_distribution_name(release, root);
     state.schema_version = STATE_SCHEMA_VERSION;
     state.modules.insert(
         product.clone(),
@@ -986,6 +994,7 @@ fn activate_pipx_release(
             entrypoints,
             owned_paths,
             activated_at_unix: now_unix()?,
+            pipx_distribution,
         },
     );
     Ok(())
@@ -1002,7 +1011,47 @@ fn pipx_distribution_name(release: &PreparedRelease, root: &Path) -> Option<Stri
     if !declared.is_empty() {
         return valid_distribution_name(declared);
     }
-    read_pyproject_name(root).and_then(|name| valid_distribution_name(&name))
+    read_pyproject_name(root)
+        .or_else(|| read_setup_py_name(root))
+        .and_then(|name| valid_distribution_name(&name))
+}
+
+/// Lee el nombre de distribucion de un `setup.py` clasico (`NAME = 'bauh'` o
+/// `name='bauh'`), para releases setuptools sin `[project]` en `pyproject.toml`
+/// como el v0.10.7 publicado del fork de Bauh. Solo cuentan los literales entre
+/// comillas: `name=NAME,` dentro de `setup(...)` es una referencia, no un nombre.
+fn read_setup_py_name(root: &Path) -> Option<String> {
+    let text = fs::read_to_string(root.join("setup.py")).ok()?;
+    for line in text.lines() {
+        let line = line.trim();
+        if line.starts_with('#') {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        if !key.trim().eq_ignore_ascii_case("name") {
+            continue;
+        }
+        let value = value.trim().trim_end_matches(',').trim();
+        let Some(quote) = value
+            .chars()
+            .next()
+            .filter(|character| *character == '"' || *character == '\'')
+        else {
+            continue;
+        };
+        let Some(inner) = value
+            .strip_prefix(quote)
+            .and_then(|rest| rest.strip_suffix(quote))
+        else {
+            continue;
+        };
+        if !inner.is_empty() && !inner.contains(quote) {
+            return Some(inner.to_string());
+        }
+    }
+    None
 }
 
 /// Filtra nombres de distribucion que no cumplen el formato de PEP 508.
@@ -1058,22 +1107,37 @@ fn read_pyproject_name(root: &Path) -> Option<String> {
     None
 }
 
-/// Retira, en la medida de lo posible, una instalacion pipx previa del paquete
-/// que se va a activar, para que sus lanzadores no bloqueen la validacion de
-/// destinos. Los fallos se ignoran a proposito: si no habia nada instalado,
-/// `pipx uninstall` termina en error y eso no es un problema.
-fn remove_previous_pipx_installation(release: &PreparedRelease, root: &Path) {
-    // Se intenta siempre, sin comprobar antes si hay lanzadores en `bin_home`:
-    // los ejecutables de la instalacion previa no tienen por que llamarse como
-    // los que declara este manifiesto (es justo lo que ocurrio cuando el fork de
-    // Bauh renombro sus scripts a `gekko-bauh*`). Si no habia nada instalado,
-    // `pipx uninstall` termina en error y se ignora.
-    let Some(distribution) = pipx_distribution_name(release, root) else {
-        return;
-    };
-    let _ = Command::new("pipx")
-        .args(["uninstall", &distribution])
-        .status();
+/// Retira, en la medida de lo posible, las instalaciones pipx previas del
+/// paquete que se va a activar, para que sus lanzadores no bloqueen la
+/// validacion de destinos. Los fallos se ignoran a proposito: si no habia nada
+/// instalado, `pipx uninstall` termina en error y eso no es un problema.
+fn remove_previous_pipx_installation(
+    release: &PreparedRelease,
+    root: &Path,
+    state: &InstallationState,
+) {
+    // Se retiran dos nombres: el que GekkoApp registro al instalar (la version
+    // anterior puede llamarse distinto: el fork de Bauh paso de `bauh` a
+    // `gekko-bauh`) y el que declara el release nuevo. Sin el primero, la
+    // actualizacion dejaba huerfanos el entorno viejo y sus lanzadores. Se
+    // intenta siempre, sin mirar antes `bin_home`: los ejecutables previos no
+    // tienen por que llamarse como los de este manifiesto.
+    let mut distributions = BTreeSet::new();
+    if let Some(recorded) = state
+        .modules
+        .get(&release.manifest.product.id)
+        .and_then(|module| module.pipx_distribution.clone())
+    {
+        distributions.insert(recorded);
+    }
+    if let Some(declared) = pipx_distribution_name(release, root) {
+        distributions.insert(declared);
+    }
+    for distribution in distributions {
+        let _ = Command::new("pipx")
+            .args(["uninstall", &distribution])
+            .status();
+    }
 }
 
 fn activate_desktop_integration(
@@ -1262,6 +1326,7 @@ pub(crate) fn record_source_module(
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs(),
+            pipx_distribution: None,
         },
     );
     write_state(&paths.state_file(), &state)
@@ -1278,6 +1343,16 @@ pub(crate) fn is_module_registered(module_id: &str) -> bool {
     load_state(&paths.state_file())
         .map(|state| state.modules.contains_key(module_id))
         .unwrap_or(false)
+}
+
+/// Distribucion pipx que GekkoApp registro al instalar este modulo, si la hay.
+pub(crate) fn registered_pipx_distribution(module_id: &str) -> Option<String> {
+    let paths = InstallPaths::detect().ok()?;
+    load_state(&paths.state_file())
+        .ok()?
+        .modules
+        .get(module_id)
+        .and_then(|module| module.pipx_distribution.clone())
 }
 
 /// Desinstala un modulo registrado limpiando sus owned_paths, active_root si
@@ -1715,6 +1790,45 @@ mod tests {
     }
 
     #[test]
+    fn reads_distribution_name_from_setuptools_setup_py() {
+        let root = env::temp_dir().join(format!(
+            "gekkoapp-setup-py-{}-{}",
+            std::process::id(),
+            now_unix().unwrap()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        // Como el v0.10.7 publicado del fork de Bauh: `pyproject.toml` solo con
+        // `[build-system]` y el nombre en `setup.py`.
+        fs::write(
+            root.join("pyproject.toml"),
+            "[build-system]\nrequires = [\"setuptools>=42\"]\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("setup.py"),
+            "# -*- coding: utf-8 -*-\nNAME = 'bauh'\nsetup(\n    name=NAME,\n    version='0.10.7',\n)\n",
+        )
+        .unwrap();
+
+        assert_eq!(read_pyproject_name(&root), None);
+        assert_eq!(read_setup_py_name(&root).as_deref(), Some("bauh"));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn installed_module_without_pipx_distribution_still_loads() {
+        // Estados escritos antes de anadir el campo deben seguir cargando.
+        let module: InstalledModule = serde_json::from_str(
+            r#"{"version":"0.10.7","contract_version":"1.0","active_root":"/x",
+                "artifact_url":"","artifact_sha256":"","entrypoints":{},
+                "owned_paths":[],"activated_at_unix":1}"#,
+        )
+        .unwrap();
+        assert_eq!(module.pipx_distribution, None);
+    }
+
+    #[test]
     fn maps_only_required_host_capabilities_to_host_packages() {
         let manifest = test_manifest();
         let plan = InstallationPlan {
@@ -1771,11 +1885,16 @@ mod tests {
 
         let tag = manifest.release.tag.clone();
         let target = manifest.platform.target.clone();
+        // Misma lista que usa `prepare_pipx`: el nombre canonico mas los
+        // anteriores, para poder ejercitar tambien los releases publicados
+        // antes del renombrado del repositorio.
+        let mut accepted = vec![crate::core::catalog::BAUH_REPOSITORY];
+        accepted.extend_from_slice(crate::core::catalog::BAUH_LEGACY_REPOSITORIES);
         validate_manifest(
             &manifest,
             crate::core::catalog::BAUH_LABEL,
             crate::core::catalog::BAUH_PRODUCT_ID,
-            &[crate::core::catalog::BAUH_REPOSITORY],
+            &accepted,
             &tag,
             &target,
         )

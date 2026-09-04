@@ -971,13 +971,29 @@ pub fn uninstall_bauh(reporter: &dyn Reporter) -> Result<(), String> {
         // pipx desinstala por el nombre de la distribucion (`gekko-bauh`), no
         // por el id de producto del release ni por el del ejecutable. Se
         // intentan tambien los nombres que usaron versiones anteriores.
-        let mut distribuciones = vec![BAUH_PIPX_DISTRIBUTION];
-        distribuciones.extend_from_slice(BAUH_LEGACY_PIPX_DISTRIBUTIONS);
+        let mut distribuciones: Vec<String> = Vec::new();
+        // Primero la que GekkoApp registro al instalar: es el nombre real del
+        // entorno aunque el release fuera anterior al renombrado (`bauh`).
+        if let Some(registrada) = crate::installer::registered_pipx_distribution(BAUH_PRODUCT_ID) {
+            distribuciones.push(registrada);
+        }
+        for nombre in std::iter::once(BAUH_PIPX_DISTRIBUTION)
+            .chain(BAUH_LEGACY_PIPX_DISTRIBUTIONS.iter().copied())
+        {
+            if !distribuciones.iter().any(|conocida| conocida == nombre) {
+                distribuciones.push(nombre.to_string());
+            }
+        }
         // Un entorno pipx llamado `bauh` a secas puede ser del proyecto
         // original, instalado por el usuario por su cuenta. Solo se retira si
         // GekkoApp tiene registrada su propia instalacion de Bauh Fork.
         if crate::installer::is_module_registered(BAUH_PRODUCT_ID) {
-            distribuciones.push(BAUH_AMBIGUOUS_PIPX_DISTRIBUTION);
+            if !distribuciones
+                .iter()
+                .any(|conocida| conocida == BAUH_AMBIGUOUS_PIPX_DISTRIBUTION)
+            {
+                distribuciones.push(BAUH_AMBIGUOUS_PIPX_DISTRIBUTION.to_string());
+            }
         } else {
             reporter.info(&format!(
                 "No se tocara un posible entorno pipx '{BAUH_AMBIGUOUS_PIPX_DISTRIBUTION}': \
