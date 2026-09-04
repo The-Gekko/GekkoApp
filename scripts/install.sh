@@ -71,6 +71,17 @@ GUI_BIN="$CRATE_DIR/target/release/gekkoapp-gui"
 mkdir -p "$BIN_DIR" "$APPS_DIR" "$ICON_DIR" "$SYMBOLIC_DIR"
 
 echo "==> Instalando binarios..."
+# Si el motor de releases activo estos entrypoints, en $BIN_DIR hay symlinks a
+# ~/.local/lib/kitotsu/gekkoapp/<version>/bin/. GNU install los reemplaza sin
+# seguirlos, pero se retiran explicitamente para avisar al usuario de que su
+# instalacion gestionada por releases deja de estar activa: el estado en
+# installations-v1.json seguira nombrando un symlink que ya no existe.
+for name in gekkoapp gekkoapp-gui; do
+  if [ -L "$BIN_DIR/$name" ]; then
+    echo "    (reemplazando el symlink gestionado por el motor de releases: $BIN_DIR/$name)"
+    rm -f "$BIN_DIR/$name"
+  fi
+done
 install -m 0755 "$CLI_BIN" "$BIN_DIR/gekkoapp"
 install -m 0755 "$GUI_BIN" "$BIN_DIR/gekkoapp-gui"
 
@@ -79,8 +90,14 @@ install -m 0644 "$ICON_SRC" "$ICON_DIR/$APP_ID.png"
 install -m 0644 "$SYMBOLIC_SRC" "$SYMBOLIC_DIR/$APP_ID-symbolic.svg"
 
 echo "==> Generando e instalando entrada de aplicacion..."
-sed -e "s|__GEKKOAPP_GUI_BIN__|$BIN_DIR/gekkoapp-gui|" "$DESKTOP_TEMPLATE" > "$APPS_DIR/gekkoapp-control-center.desktop"
-chmod 0644 "$APPS_DIR/gekkoapp-control-center.desktop"
+# Se usa el mismo nombre que el motor de releases y que install-release.sh
+# ($APP_ID.desktop). Con el nombre antiguo, instalar desde fuente y desde el
+# release dejaba DOS entradas duplicadas en el menu.
+rm -f "$APPS_DIR/gekkoapp-control-center.desktop"
+# El Exec se entrecomilla: un prefijo con espacios generaba una entrada .desktop
+# invalida que el escritorio no podia lanzar.
+sed -e "s|__GEKKOAPP_GUI_BIN__|\"$BIN_DIR/gekkoapp-gui\"|" "$DESKTOP_TEMPLATE" > "$APPS_DIR/$APP_ID.desktop"
+chmod 0644 "$APPS_DIR/$APP_ID.desktop"
 
 if command -v update-desktop-database >/dev/null 2>&1; then
   update-desktop-database "$APPS_DIR" >/dev/null 2>&1 || true
@@ -94,7 +111,7 @@ echo
 echo "==> Instalacion completada."
 echo "  CLI:               $BIN_DIR/gekkoapp"
 echo "  Control Center:    $BIN_DIR/gekkoapp-gui"
-echo "  Entrada de menu:   $APPS_DIR/gekkoapp-control-center.desktop"
+echo "  Entrada de menu:   $APPS_DIR/$APP_ID.desktop"
 echo "  Iconos:            $ICON_DIR/$APP_ID.png"
 echo "                     $SYMBOLIC_DIR/$APP_ID-symbolic.svg"
 

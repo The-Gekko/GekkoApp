@@ -8,6 +8,29 @@ pub const BAUH_PRODUCT_ID: &str = "bauh-fork-the-gekko";
 pub const BAUH_REPOSITORY: &str = "The-Gekko/Bauh-Fork-The-Gekko";
 pub const BAUH_LABEL: &str = "Bauh Fork (The-Gekko)";
 
+/// Nombre de la distribucion Python con la que pipx registra el fork.
+///
+/// Es el `[project] name` de `pyproject.toml` en The-Gekko/Bauh-Fork-The-Gekko.
+/// pipx crea y desinstala el entorno por ese nombre: ni el id de producto del
+/// release (`bauh-fork-the-gekko`) ni el del paquete importable (`bauh`) sirven
+/// para `pipx uninstall`.
+pub const BAUH_PIPX_DISTRIBUTION: &str = "gekko-bauh";
+
+/// Nombres con los que versiones anteriores de GekkoApp registraron el entorno
+/// pipx. Son inequivocamente nuestros: nadie mas usa ese identificador.
+pub const BAUH_LEGACY_PIPX_DISTRIBUTIONS: &[&str] = &["bauh-fork-the-gekko"];
+
+/// Nombre de distribucion AMBIGUO: un entorno pipx llamado `bauh` puede ser el
+/// del proyecto original instalado por el propio usuario. Solo debe retirarse
+/// cuando el estado de GekkoApp confirma que la instalacion es nuestra.
+pub const BAUH_AMBIGUOUS_PIPX_DISTRIBUTION: &str = "bauh";
+
+/// Lanzador principal que publica el fork en `[project.scripts]`.
+pub const BAUH_LAUNCHER: &str = "gekko-bauh";
+
+/// Lanzadores publicados por versiones anteriores del fork.
+pub const BAUH_LEGACY_LAUNCHERS: &[&str] = &["bauh"];
+
 pub const GEKKO_ADB_PRODUCT_ID: &str = "gekko-adb";
 pub const GEKKO_ADB_REPOSITORY: &str = "The-Gekko/gekko-adb";
 pub const GEKKO_ADB_LABEL: &str = "Gekko ADB Studio";
@@ -75,7 +98,8 @@ pub fn all_components() -> Vec<CatalogComponent> {
 /// un archivo fuente que se instala con `pipx install --force` tras verificar
 /// su SHA-256 contra el manifesto.
 pub fn resolve_bauh_plan(target: &str) -> Result<InstallationPlan, String> {
-    let (tag, manifest_url, asset_urls) = github::resolve_latest_release(BAUH_REPOSITORY, target)?;
+    let (tag, manifest_url, asset_urls) =
+        github::resolve_latest_release(BAUH_REPOSITORY, BAUH_PRODUCT_ID, target)?;
     ensure_https(&manifest_url)?;
     let bytes = github::download_manifest_body(&manifest_url)?;
     let manifest: ArtifactManifest = serde_json::from_slice(&bytes)
@@ -110,7 +134,7 @@ pub fn resolve_bauh_plan(target: &str) -> Result<InstallationPlan, String> {
 /// integracion de escritorio que se activa con el layout nativo de symlinks.
 pub fn resolve_gekkoapp_plan(target: &str) -> Result<InstallationPlan, String> {
     let (tag, manifest_url, asset_urls) =
-        github::resolve_latest_release(GEKKOAPP_REPOSITORY, target)?;
+        github::resolve_latest_release(GEKKOAPP_REPOSITORY, GEKKOAPP_PRODUCT_ID, target)?;
     ensure_https(&manifest_url)?;
     let bytes = github::download_manifest_body(&manifest_url)?;
     let manifest: ArtifactManifest = serde_json::from_slice(&bytes)

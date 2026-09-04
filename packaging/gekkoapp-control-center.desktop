@@ -7,6 +7,6 @@ Comment=Post-install & config: Kito, Bauh, Gekko ADB, Terminal, Hyprland, Niri, 
 Exec=__GEKKOAPP_GUI_BIN__
 Icon=org.thegekko.gekkoapp
 Terminal=false
-Categories=System;Settings;PackageManager;
+Categories=Settings;PackageManager;
 Keywords=gekkoapp;control;center;kito;bauh;gekko-adb;adb;terminal;hyprland;niri;gaming;chaotic;post-install;
 StartupNotify=true

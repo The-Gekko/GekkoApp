@@ -27,6 +27,14 @@ pub struct ArtifactManifest {
     pub distribution_contract: String,
     #[serde(default = "default_install_method")]
     pub install_method: String,
+    /// Nombre de la distribucion Python con la que pipx registra el paquete.
+    ///
+    /// Solo aplica a `install_method: "python_pipx"`. pipx crea y desinstala el
+    /// entorno por el `[project] name` de `pyproject.toml`, que no tiene por que
+    /// coincidir con el id de producto ni con el del ejecutable. Si el
+    /// manifiesto no lo declara se deduce del arbol ya verificado.
+    #[serde(default)]
+    pub pipx_distribution: String,
     pub product: Product,
     pub release: Release,
     pub platform: Platform,
@@ -324,6 +332,22 @@ impl InstallationPlan {
                 tag,
                 target,
             )?;
+            // El metodo de activacion NO puede venir elegido por el manifiesto
+            // remoto: los componentes del catalogo Kito se activan siempre con
+            // el layout nativo de symlinks. Sin este corte, un release
+            // manipulado podria declarar `python_pipx` y conseguir que GekkoApp
+            // ejecute `pipx install` (y por tanto codigo de build arbitrario)
+            // sobre el arbol recien extraido.
+            if !matches!(
+                manifest.install_method.as_str(),
+                "native" | "binary_extract"
+            ) {
+                return Err(format!(
+                    "{} declara un metodo de instalacion no permitido: {}",
+                    status.component.label(),
+                    manifest.install_method
+                ));
+            }
             let minimum_glibc =
                 manifest.platform.libc.minimum.as_deref().ok_or_else(|| {
                     format!("{} no declara glibc minima", status.component.label())
@@ -365,31 +389,48 @@ impl InstallationPlan {
         }
     }
 
-    pub fn required_arch_packages(&self) -> Vec<&'static str> {
+    /// Paquetes de host que exigen las capacidades obligatorias del plan.
+    ///
+    /// Devuelve `(paquetes, capacidades_sin_soporte)`. Los nombres dependen de
+    /// la distribucion: el mapeo anterior era solo de Arch y en Solus mandaba a
+    /// eopkg nombres inexistentes (`vulkan-icd-loader`, `awww`), asi que la
+    /// instalacion fallaba a mitad. Las capacidades sin equivalente se devuelven
+    /// aparte para poder abortar antes de tocar el sistema.
+    pub fn required_host_packages(&self, solus: bool) -> (Vec<&'static str>, Vec<&'static str>) {
         let mut packages = BTreeSet::new();
+        let mut unsupported = BTreeSet::new();
         for release in &self.releases {
             for capability in &release.manifest.requirements.host_capabilities {
                 if capability.optional {
                     continue;
                 }
-                match capability.id.as_str() {
-                    "runtime.qt6" => {
+                match (capability.id.as_str(), solus) {
+                    ("runtime.qt6", _) => {
                         packages.extend(["qt6-base", "qt6-declarative", "qt6-wayland"]);
                     }
-                    "renderer.awww" => {
+                    ("renderer.awww", false) => {
                         packages.insert("awww");
                     }
-                    "gpu.wgpu" => {
+                    ("renderer.awww", true) => {
+                        unsupported.insert("renderer.awww");
+                    }
+                    ("gpu.wgpu", false) => {
                         packages.extend(["vulkan-icd-loader", "wayland", "libxkbcommon"]);
                     }
-                    "audio.pipewire" => {
+                    ("gpu.wgpu", true) => {
+                        packages.extend(["vulkan", "wayland", "libxkbcommon"]);
+                    }
+                    ("audio.pipewire", _) => {
                         packages.insert("pipewire");
                     }
                     _ => {}
                 }
             }
         }
-        packages.into_iter().collect()
+        (
+            packages.into_iter().collect(),
+            unsupported.into_iter().collect(),
+        )
     }
 
     pub fn prefetch(&self, paths: &InstallPaths) -> Result<(), String> {
@@ -413,15 +454,31 @@ impl InstallationPlan {
             let root = install_version(release, &archive, paths)?;
             installed.push((release, root));
         }
-        validate_activation_destinations(&installed, paths, &state)?;
-        for (release, root) in installed {
+        // Una instalacion pipx previa del mismo paquete (hecha por el propio
+        // instalador del proyecto, por ejemplo) deja sus lanzadores en
+        // `bin_home`. Se retira antes de validar destinos: si no, la validacion
+        // los tomaria por "rutas ajenas" y abortaria toda la actualizacion.
+        for (release, root) in &installed {
             if release.manifest.install_method == "python_pipx" {
-                activate_pipx_release(release, &root, paths, &mut state)?;
-            } else {
-                activate_release(release, &root, paths, &mut state)?;
+                remove_previous_pipx_installation(release, root);
             }
         }
-        write_state(&paths.state_file(), &state)?;
+        validate_activation_destinations(&installed, paths, &state)?;
+        for (release, root) in installed {
+            let activation = if release.manifest.install_method == "python_pipx" {
+                activate_pipx_release(release, &root, paths, &mut state)
+            } else {
+                activate_release(release, &root, paths, &mut state)
+            };
+            // El estado se escribe tras cada activacion. Si una falla a mitad de
+            // un plan de varios componentes, lo ya activado queda registrado:
+            // se puede desinstalar y un reintento no lo vera como "ruta ajena".
+            // El error de activacion tiene prioridad sobre el de escritura: es
+            // el que explica de verdad que ha pasado.
+            let persisted = write_state(&paths.state_file(), &state);
+            activation?;
+            persisted?;
+        }
         Ok(state)
     }
 }
@@ -572,7 +629,7 @@ fn download_artifact(release: &PreparedRelease, paths: &InstallPaths) -> Result<
     let destination = artifacts.join(&release.manifest.artifact.file_name);
     if destination.is_file()
         && file_size(&destination)? == release.manifest.artifact.size_bytes
-        && sha256_file(&destination)? == release.manifest.artifact.sha256
+        && sha256_file(&destination)?.eq_ignore_ascii_case(&release.manifest.artifact.sha256)
     {
         return Ok(destination);
     }
@@ -599,21 +656,34 @@ fn download_artifact(release: &PreparedRelease, paths: &InstallPaths) -> Result<
         .write(true)
         .open(&temporary)
         .map_err(io_error("crear descarga temporal"))?;
-    io::copy(&mut reader, &mut output).map_err(io_error("descargar artefacto"))?;
+    // Cualquier salida por error a partir de aqui debe borrar el temporal: si
+    // no, una descarga interrumpida deja basura en la cache para siempre.
+    let cleanup = |error: String| -> String {
+        let _ = fs::remove_file(&temporary);
+        error
+    };
+    io::copy(&mut reader, &mut output)
+        .map_err(io_error("descargar artefacto"))
+        .map_err(cleanup)?;
     output
         .sync_all()
-        .map_err(io_error("sincronizar artefacto"))?;
+        .map_err(io_error("sincronizar artefacto"))
+        .map_err(cleanup)?;
 
-    let size = file_size(&temporary)?;
-    let digest = sha256_file(&temporary)?;
-    if size != release.manifest.artifact.size_bytes || digest != release.manifest.artifact.sha256 {
+    let size = file_size(&temporary).map_err(cleanup)?;
+    let digest = sha256_file(&temporary).map_err(cleanup)?;
+    if size != release.manifest.artifact.size_bytes
+        || !digest.eq_ignore_ascii_case(&release.manifest.artifact.sha256)
+    {
         let _ = fs::remove_file(&temporary);
         return Err(format!(
             "el artefacto {} no coincide con su manifiesto",
             release.manifest.artifact.file_name
         ));
     }
-    fs::rename(&temporary, &destination).map_err(io_error("activar artefacto en cache"))?;
+    fs::rename(&temporary, &destination)
+        .map_err(io_error("activar artefacto en cache"))
+        .map_err(cleanup)?;
     Ok(destination)
 }
 
@@ -643,8 +713,16 @@ fn install_version(
         return Err(error);
     }
     let package_root = staging.join(format!("{product}-{version}"));
-    verify_payload(&package_root, &release.manifest.payload)?;
-    fs::rename(&package_root, &final_root).map_err(io_error("activar version instalada"))?;
+    // El staging se retira tambien cuando la verificacion o la activacion
+    // fallan; antes solo se limpiaba en el camino feliz y en el de extraccion.
+    let discard_staging = |error: String| -> String {
+        let _ = fs::remove_dir_all(&staging);
+        error
+    };
+    verify_payload(&package_root, &release.manifest.payload).map_err(discard_staging)?;
+    fs::rename(&package_root, &final_root)
+        .map_err(io_error("activar version instalada"))
+        .map_err(discard_staging)?;
     fs::remove_dir_all(&staging).map_err(io_error("retirar staging"))?;
     Ok(final_root)
 }
@@ -664,6 +742,15 @@ fn extract_archive(
         .iter()
         .map(|entry| format!("{expected_root}/{}", entry.path))
         .collect::<BTreeSet<_>>();
+    // Tamano declarado por archivo: se comprueba contra la cabecera tar ANTES
+    // de escribir nada. El limite de descarga solo acota el .tar.zst
+    // comprimido, asi que sin esto una bomba de descompresion podria llenar el
+    // disco antes de que `verify_payload` llegase a mirar los hashes.
+    let expected_sizes = manifest
+        .payload
+        .iter()
+        .map(|entry| (format!("{expected_root}/{}", entry.path), entry.size_bytes))
+        .collect::<BTreeMap<_, _>>();
     let mut found_files = BTreeSet::new();
 
     for entry in archive
@@ -687,6 +774,12 @@ fn extract_archive(
             let text = path_to_manifest_string(&path)?;
             if !expected_files.contains(&text) {
                 return Err(format!("archivo no declarado en payload: {text}"));
+            }
+            let declared = expected_sizes.get(&text).copied().unwrap_or_default();
+            if entry.header().size().unwrap_or(u64::MAX) != declared {
+                return Err(format!(
+                    "el tamano de {text} dentro del artefacto no coincide con el payload"
+                ));
             }
             found_files.insert(text);
         } else if !entry_type.is_dir() {
@@ -713,7 +806,9 @@ fn verify_payload(root: &Path, payload: &[PayloadEntry]) -> Result<(), String> {
         if !metadata.file_type().is_file() {
             return Err(format!("payload no es un archivo regular: {}", entry.path));
         }
-        if metadata.len() != entry.size_bytes || sha256_file(&path)? != entry.sha256 {
+        if metadata.len() != entry.size_bytes
+            || !sha256_file(&path)?.eq_ignore_ascii_case(&entry.sha256)
+        {
             return Err(format!("hash o tamano invalido en payload: {}", entry.path));
         }
         let expected_mode = u32::from_str_radix(entry.mode.trim_start_matches('0'), 8)
@@ -820,32 +915,12 @@ fn activate_pipx_release(
         })
         .unwrap_or_default();
 
-    // `pipx install --force` se niega a sobrescribir rutas bin que ya gestiona
-    // pipx ("la activacion pisaria una ruta ajena"). Si hay una instalacion
-    // pipx previa del paquete, se desinstala antes de reinstalar.
-    let primary_entrypoint = release
-        .manifest
-        .entrypoints
-        .first()
-        .map(|entrypoint| entrypoint.name.as_str())
-        .unwrap_or(product);
-    let launcher = paths.bin_home.join(primary_entrypoint);
-    if launcher.exists() {
-        let uninstall = Command::new("pipx")
-            .arg("uninstall")
-            .arg(primary_entrypoint)
-            .status()
-            .map_err(|error| format!("no se pudo ejecutar pipx: {error}"))?;
-        if !uninstall.success() {
-            return Err(format!(
-                "pipx no pudo desinstalar la instalacion previa de {}",
-                release.component_label
-            ));
-        }
-    }
-
+    // La instalacion pipx previa ya se retiro en `InstallationPlan::install`.
+    // `--force` reinstala aunque pipx considere el paquete presente y le deja
+    // sobrescribir los lanzadores que el mismo gestiona.
     let pipx = Command::new("pipx")
         .arg("install")
+        .arg("--force")
         .arg(root)
         .status()
         .map_err(|error| format!("no se pudo ejecutar pipx: {error}"))?;
@@ -863,8 +938,12 @@ fn activate_pipx_release(
         let launcher = paths.bin_home.join(&entrypoint.name);
         if !launcher.is_file() {
             return Err(format!(
-                "pipx no creo el lanzador esperado: {}",
-                launcher.display()
+                "pipx no creo el lanzador esperado: {}. El manifiesto declara el \
+                 entrypoint '{}', pero la distribucion instalada no lo publica en \
+                 [project.scripts]: revisa que el release y el proyecto declaren los \
+                 mismos ejecutables.",
+                launcher.display(),
+                entrypoint.name
             ));
         }
         entrypoints.insert(entrypoint.name.clone(), launcher.display().to_string());
@@ -903,6 +982,91 @@ fn activate_pipx_release(
         },
     );
     Ok(())
+}
+
+/// Nombre de la distribucion Python con la que pipx registra un release.
+///
+/// pipx crea y desinstala el entorno por el `[project] name` de
+/// `pyproject.toml`, no por el id de producto del release ni por el nombre del
+/// ejecutable. Se usa el valor declarado en el manifiesto y, si no lo trae, el
+/// que aparece en el arbol ya extraido y verificado por hash.
+fn pipx_distribution_name(release: &PreparedRelease, root: &Path) -> Option<String> {
+    let declared = release.manifest.pipx_distribution.trim();
+    if !declared.is_empty() {
+        return valid_distribution_name(declared);
+    }
+    read_pyproject_name(root).and_then(|name| valid_distribution_name(&name))
+}
+
+/// Filtra nombres de distribucion que no cumplen el formato de PEP 508.
+///
+/// El valor llega de un manifiesto remoto y acaba como argumento de
+/// `pipx uninstall`: aunque no pasa por una shell, un nombre que empezara por
+/// `-` se interpretaria como una opcion de pipx.
+fn valid_distribution_name(name: &str) -> Option<String> {
+    let valido = !name.is_empty()
+        && name.len() <= 128
+        && name
+            .bytes()
+            .next()
+            .is_some_and(|byte| byte.is_ascii_alphanumeric())
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"-_.".contains(&byte));
+    valido.then(|| name.to_string())
+}
+
+/// Lee `[project] name` de un `pyproject.toml` sin dependencias de TOML.
+fn read_pyproject_name(root: &Path) -> Option<String> {
+    let text = fs::read_to_string(root.join("pyproject.toml")).ok()?;
+    let mut in_project = false;
+    for line in text.lines() {
+        let line = line.trim();
+        if line.starts_with('#') {
+            continue;
+        }
+        if line.starts_with('[') {
+            in_project = line == "[project]";
+            continue;
+        }
+        if !in_project {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        if key.trim() != "name" {
+            continue;
+        }
+        let value = value
+            .split('#')
+            .next()
+            .unwrap_or_default()
+            .trim()
+            .trim_matches(|character| character == '"' || character == '\'');
+        if !value.is_empty() {
+            return Some(value.to_string());
+        }
+    }
+    None
+}
+
+/// Retira, en la medida de lo posible, una instalacion pipx previa del paquete
+/// que se va a activar, para que sus lanzadores no bloqueen la validacion de
+/// destinos. Los fallos se ignoran a proposito: si no habia nada instalado,
+/// `pipx uninstall` termina en error y eso no es un problema.
+fn remove_previous_pipx_installation(release: &PreparedRelease, root: &Path) {
+    // Se intenta siempre, sin comprobar antes si hay lanzadores en `bin_home`:
+    // los ejecutables de la instalacion previa no tienen por que llamarse como
+    // los que declara este manifiesto (es justo lo que ocurrio cuando el fork de
+    // Bauh renombro sus scripts a `gekko-bauh*`). Si no habia nada instalado,
+    // `pipx uninstall` termina en error y se ignora.
+    let Some(distribution) = pipx_distribution_name(release, root) else {
+        return;
+    };
+    let _ = Command::new("pipx")
+        .args(["uninstall", &distribution])
+        .status();
 }
 
 fn activate_desktop_integration(
@@ -1096,6 +1260,19 @@ pub(crate) fn record_source_module(
     write_state(&paths.state_file(), &state)
 }
 
+/// ¿Tiene GekkoApp registrado este modulo en su estado de instalacion?
+///
+/// Sirve para distinguir lo que instalo GekkoApp de lo que ya estaba en el
+/// sistema antes de retirar algo cuyo nombre podria pertenecer a otro.
+pub(crate) fn is_module_registered(module_id: &str) -> bool {
+    let Ok(paths) = InstallPaths::detect() else {
+        return false;
+    };
+    load_state(&paths.state_file())
+        .map(|state| state.modules.contains_key(module_id))
+        .unwrap_or(false)
+}
+
 /// Desinstala un modulo registrado limpiando sus owned_paths, active_root si
 /// pertenece a kitotsu, y removiendolo del estado.
 pub fn uninstall_registered_module(module_id: &str) -> Result<(), String> {
@@ -1104,17 +1281,31 @@ pub fn uninstall_registered_module(module_id: &str) -> Result<(), String> {
     let mut state = load_state(&state_file)?;
 
     if let Some(module) = state.modules.remove(module_id) {
+        // Los fallos de borrado se acumulan y se informan: antes se ignoraban
+        // todos y el flujo anunciaba una desinstalacion limpia que no lo era.
+        let mut failures = Vec::new();
         for owned in &module.owned_paths {
-            let p = Path::new(&owned.path);
-            if p.exists() || fs::symlink_metadata(p).is_ok() {
-                let _ = fs::remove_file(p);
+            let path = Path::new(&owned.path);
+            if fs::symlink_metadata(path).is_err() {
+                continue;
+            }
+            if let Err(error) = fs::remove_file(path) {
+                failures.push(format!("{}: {error}", owned.path));
             }
         }
         let root = Path::new(&module.active_root);
         if root.starts_with(&paths.versions_home) && root.exists() {
-            let _ = fs::remove_dir_all(root);
+            if let Err(error) = fs::remove_dir_all(root) {
+                failures.push(format!("{}: {error}", module.active_root));
+            }
         }
         write_state(&state_file, &state)?;
+        if !failures.is_empty() {
+            return Err(format!(
+                "{module_id} se retiro del estado, pero no se pudieron borrar: {}",
+                failures.join("; ")
+            ));
+        }
     }
 
     Ok(())
@@ -1297,13 +1488,54 @@ fn parse_version(value: &str) -> Result<Vec<u32>, String> {
     if value.is_empty() {
         return Err("version vacia".into());
     }
-    value
-        .split('.')
-        .map(|part| {
-            part.parse::<u32>()
-                .map_err(|_| format!("version invalida: {value}"))
-        })
-        .collect()
+    // Se separa la version publica de la etiqueta local de PEP 440
+    // (`0.10.8+gekko.1` -> publica `0.10.8`, local `gekko.1`) y se ignora
+    // cualquier sufijo no numerico de un componente (`2.41-rc1` -> `2.41`).
+    // Sin esto la campana de actualizaciones no podia comparar las versiones
+    // del fork de Bauh, que usa exactamente ese esquema.
+    let (public, local) = match value.split_once('+') {
+        Some((public, local)) => (public, Some(local)),
+        None => (value, None),
+    };
+    let mut parts = Vec::new();
+    for component in public.split('.') {
+        let digits = component
+            .chars()
+            .take_while(char::is_ascii_digit)
+            .collect::<String>();
+        if digits.is_empty() {
+            // Un componente que ni siquiera empieza por un digito ("2.x") sigue
+            // siendo una version invalida: la tolerancia es solo para sufijos.
+            return Err(format!("version invalida: {value}"));
+        }
+        parts.push(
+            digits
+                .parse::<u32>()
+                .map_err(|_| format!("version invalida: {value}"))?,
+        );
+        if digits.len() != component.len() {
+            break;
+        }
+    }
+    if parts.is_empty() {
+        return Err(format!("version invalida: {value}"));
+    }
+    // Los numeros de la etiqueta local se anaden detras, para que
+    // `0.10.8+gekko.2` > `0.10.8+gekko.1` > `0.10.8`, como manda PEP 440. Los
+    // segmentos no numericos de la etiqueta (`gekko`) no participan en el
+    // orden: basta con distinguir builds del mismo upstream.
+    if let Some(local) = local {
+        for component in local.split('.') {
+            let digits = component
+                .chars()
+                .take_while(char::is_ascii_digit)
+                .collect::<String>();
+            if let Ok(number) = digits.parse::<u32>() {
+                parts.push(number);
+            }
+        }
+    }
+    Ok(parts)
 }
 
 fn validate_manifest_path(path: &str) -> Result<(), String> {
@@ -1358,11 +1590,14 @@ pub(crate) fn ensure_https(url: &str) -> Result<(), String> {
 }
 
 fn safe_file_name(name: &str) -> bool {
+    // Se admite '+' porque las versiones locales de PEP 440 (por ejemplo
+    // `0.10.8+gekko.1`, la que usa el fork de Bauh) viajan en el nombre del
+    // artefacto. Sigue sin admitirse cualquier separador de ruta.
     !name.is_empty()
         && Path::new(name).file_name().and_then(|value| value.to_str()) == Some(name)
         && name
             .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte))
+            .all(|byte| byte.is_ascii_alphanumeric() || b"._-+".contains(&byte))
 }
 
 fn is_sha256(value: &str) -> bool {
@@ -1471,7 +1706,7 @@ mod tests {
     }
 
     #[test]
-    fn maps_only_required_host_capabilities_to_arch_packages() {
+    fn maps_only_required_host_capabilities_to_host_packages() {
         let manifest = test_manifest();
         let plan = InstallationPlan {
             releases: vec![PreparedRelease {
@@ -1481,10 +1716,17 @@ mod tests {
                 manifest,
             }],
         };
+        let (arch_packages, arch_unsupported) = plan.required_host_packages(false);
         assert_eq!(
-            plan.required_arch_packages(),
+            arch_packages,
             vec!["qt6-base", "qt6-declarative", "qt6-wayland"]
         );
+        assert!(arch_unsupported.is_empty());
+
+        // Los nombres de Qt6 coinciden en Solus, asi que el plan es el mismo.
+        let (solus_packages, solus_unsupported) = plan.required_host_packages(true);
+        assert_eq!(solus_packages, arch_packages);
+        assert!(solus_unsupported.is_empty());
     }
 
     #[test]
@@ -1614,6 +1856,37 @@ mod tests {
             std::cmp::Ordering::Equal
         );
         assert!(compare_versions("2.x", "2.39").is_err());
+
+        // Versiones locales de PEP 440: el fork de Bauh publica `0.10.8+gekko.1`
+        // y la campana de actualizaciones tiene que poder compararlas.
+        assert_eq!(
+            compare_versions("0.10.8+gekko.1", "0.10.7").unwrap(),
+            std::cmp::Ordering::Greater
+        );
+        // La etiqueta local ordena por detras de la version publica.
+        assert_eq!(
+            compare_versions("0.10.8+gekko.2", "0.10.8").unwrap(),
+            std::cmp::Ordering::Greater
+        );
+        assert_eq!(
+            compare_versions("0.10.8+gekko.2", "0.10.8+gekko.1").unwrap(),
+            std::cmp::Ordering::Greater
+        );
+        assert_eq!(
+            compare_versions("0.10.8+gekko.1", "0.10.8+gekko.1").unwrap(),
+            std::cmp::Ordering::Equal
+        );
+        // ...pero nunca por delante de una version publica mayor.
+        assert_eq!(
+            compare_versions("0.10.8+gekko.9", "0.10.9").unwrap(),
+            std::cmp::Ordering::Less
+        );
+        assert_eq!(
+            compare_versions("1.0.0-rc1", "1.0.0").unwrap(),
+            std::cmp::Ordering::Equal
+        );
+        assert!(compare_versions("", "1.0").is_err());
+        assert!(compare_versions("+gekko.1", "1.0").is_err());
     }
 
     #[test]

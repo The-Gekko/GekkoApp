@@ -22,21 +22,140 @@ function setProgress(label, percent) {
   barFill.style.width = `${Math.max(0, Math.min(100, percent))}%`;
 }
 
+// ── Confirmacion previa a cualquier mutacion ─────────────────────────────────
+// El backend recibe require_confirmation=false y GuiReporter::confirm() acepta
+// siempre, asi que la confirmacion explicita del usuario tiene que ocurrir aqui.
+// Sin esto un clic en "Desinstalar" borraba cosas sin preguntar.
+function confirmAction({ title, body, detail, confirmLabel, danger }) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.className = "modal-overlay";
+
+    const box = document.createElement("div");
+    box.className = "modal";
+    box.setAttribute("role", "dialog");
+    box.setAttribute("aria-modal", "true");
+
+    const heading = document.createElement("h3");
+    heading.textContent = title;
+    box.appendChild(heading);
+
+    const text = document.createElement("p");
+    text.className = "modal-body";
+    text.textContent = body;
+    box.appendChild(text);
+
+    if (detail) {
+      const extra = document.createElement("p");
+      extra.className = "modal-detail";
+      extra.textContent = detail;
+      box.appendChild(extra);
+    }
+
+    const actions = document.createElement("div");
+    actions.className = "modal-actions";
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "btn-ghost";
+    cancel.textContent = "Cancelar";
+    const accept = document.createElement("button");
+    accept.type = "button";
+    accept.textContent = confirmLabel || "Continuar";
+    if (danger) accept.className = "btn-danger";
+    actions.appendChild(cancel);
+    actions.appendChild(accept);
+    box.appendChild(actions);
+    overlay.appendChild(box);
+
+    let done = false;
+    const close = (value) => {
+      if (done) return;
+      done = true;
+      document.removeEventListener("keydown", onKey, true);
+      overlay.remove();
+      resolve(value);
+    };
+    const onKey = (event) => {
+      if (event.key === "Escape") {
+        event.stopPropagation();
+        close(false);
+        return;
+      }
+      // Foco atrapado: sin esto se podia tabular hasta los botones de debajo
+      // del overlay y activarlos con Enter.
+      if (event.key === "Tab") {
+        const focusables = [cancel, accept];
+        const activo = document.activeElement;
+        const indice = focusables.indexOf(activo);
+        event.preventDefault();
+        const siguiente = event.shiftKey
+          ? focusables[(indice <= 0 ? focusables.length : indice) - 1]
+          : focusables[(indice + 1) % focusables.length];
+        siguiente.focus();
+      }
+    };
+    cancel.addEventListener("click", () => close(false));
+    accept.addEventListener("click", () => close(true));
+    overlay.addEventListener("click", (event) => {
+      if (event.target === overlay) close(false);
+    });
+    document.addEventListener("keydown", onKey, true);
+
+    document.body.appendChild(overlay);
+    // Foco por defecto en Cancelar cuando la accion es destructiva.
+    (danger ? cancel : accept).focus();
+  });
+}
+
+let busy = false;
+
+function setBusy(value) {
+  busy = value;
+  for (const button of document.querySelectorAll("main button")) {
+    if (value) {
+      // El snapshot se toma UNA sola vez: una segunda entrada en estado
+      // ocupado guardaria "ya estaba deshabilitado" y los botones se quedarian
+      // deshabilitados para siempre al restaurar.
+      if (button.dataset.wasDisabled === undefined) {
+        button.dataset.wasDisabled = button.disabled ? "1" : "0";
+      }
+      button.disabled = true;
+    } else if (button.dataset.wasDisabled !== undefined) {
+      button.disabled = button.dataset.wasDisabled === "1";
+      delete button.dataset.wasDisabled;
+    }
+  }
+  if (!value) refreshButtons();
+}
+
+// Pide confirmacion y ejecuta la operacion, una cada vez.
+async function guardedRun(prompt, command, args) {
+  if (busy) {
+    appendLog("warn", "Ya hay una operacion en curso; espera a que termine.");
+    return;
+  }
+  // Se marca ocupado ANTES de abrir el dialogo. El overlay solo tapa el raton:
+  // con el teclado se podia llegar a otro boton y lanzar una segunda operacion
+  // privilegiada mientras la primera esperaba confirmacion.
+  setBusy(true);
+  try {
+    if (!(await confirmAction(prompt))) {
+      appendLog("info", "Operacion cancelada. No se ha modificado nada.");
+      return;
+    }
+    await runInstall(command, args);
+  } catch {
+    // runInstall ya registro el error en el log.
+  } finally {
+    setBusy(false);
+  }
+}
+
 function badge(text, kind) {
   const el = document.createElement("span");
   el.className = "badge" + (kind ? ` ${kind}` : "");
   el.textContent = text;
   return el;
-}
-
-function installedOf(products) {
-  const versions = new Map();
-  for (const item of catalog.items) {
-    if (products.has(item.id) && item.installedVersion) {
-      versions.set(item.id, item.installedVersion);
-    }
-  }
-  return versions;
 }
 
 function render() {
@@ -73,7 +192,9 @@ function render() {
     const label = document.createElement("label");
     const box = document.createElement("input");
     box.type = "checkbox";
-    box.checked = m.mandatory || false;
+    // Un modulo ya instalado se marca: si se dejara sin marcar, "Actualizar"
+    // reinstalaria el entorno sin el.
+    box.checked = m.mandatory || Boolean(m.installedVersion);
     box.disabled = m.mandatory;
     box.id = `mod-${m.productId}`;
     box.dataset.product = m.productId;
@@ -124,6 +245,12 @@ function refreshButtons() {
   $("niri-install").disabled = $("niri-pass").value.trim() === "";
   $("gaming-install").disabled = $("gaming-pass").value.trim() === "";
   $("chaotic-install").disabled = $("chaotic-pass").value.trim() === "";
+  // Estos desinstaladores llaman a pacman/eopkg: necesitan la contrasena igual
+  // que su instalador. Sin gatearlos fallaban siempre con "Introduce tu
+  // contrasena de sudo en la interfaz".
+  $("hyprland-uninstall").disabled = $("hyprland-pass").value.trim() === "";
+  $("niri-uninstall").disabled = $("niri-pass").value.trim() === "";
+  $("gaming-uninstall").disabled = $("gaming-pass").value.trim() === "";
 }
 
 // ── Campana de actualizaciones ───────────────────────────────────────────────
@@ -271,30 +398,55 @@ async function loadTheme() {
 async function runInstall(command, args) {
   setProgress("Iniciando...", 5);
   if (unlisten) {
-    unlisten.then((fn) => fn());
+    const previous = unlisten;
     unlisten = null;
-  }
-  unlisten = listen("install://event", (event) => {
-    const payload = event.payload;
-    if (payload.kind === "log") {
-      appendLog(payload.data.level, payload.data.message);
-    } else if (payload.kind === "progress") {
-      setProgress(payload.data.label, payload.data.percent);
+    try {
+      (await previous)();
+    } catch {
+      // El listener anterior ya no existe.
     }
-  });
-
+  }
   try {
+    // Se espera al registro del listener antes de invocar: si no, los primeros
+    // mensajes del flujo se emiten antes de que haya nadie escuchando. Va
+    // dentro del try para que un fallo al registrarlo tambien se reporte, en
+    // vez de dejar la barra clavada en "Iniciando..." sin explicacion.
+    unlisten = await listen("install://event", (event) => {
+      const payload = event.payload;
+      if (payload.kind === "log") {
+        appendLog(payload.data.level, payload.data.message);
+      } else if (payload.kind === "progress") {
+        setProgress(payload.data.label, payload.data.percent);
+      }
+    });
+
     const result = await invoke(command, args);
     appendLog("ok", "Operacion completada.");
     setProgress("Completado", 100);
-    catalog = await invoke("catalog_state");
-    render();
-    refreshUpdates();
+    // El refresco del catalogo va aparte: si fallara, la operacion ya se
+    // completo y no debe reportarse como un fallo de la instalacion.
+    try {
+      catalog = await invoke("catalog_state");
+      render();
+      refreshUpdates();
+    } catch (error) {
+      appendLog("warn", `No se pudo refrescar el catalogo: ${error}`);
+    }
     return result;
   } catch (error) {
     appendLog("err", String(error));
     setProgress("Fallo", 100);
     throw error;
+  } finally {
+    if (unlisten) {
+      const fn = unlisten;
+      unlisten = null;
+      try {
+        fn();
+      } catch {
+        // Nada que soltar.
+      }
+    }
   }
 }
 
@@ -314,76 +466,240 @@ async function init() {
 
   listen("theme://changed", (event) => applyPalette(event.payload));
 
+  const INSTALL_NOTE =
+    "Se instalaran paquetes del sistema con tu contrasena de sudo. Puedes seguir el detalle en el panel de Progreso.";
+
   $("kito-install").addEventListener("click", () => {
     const selection = {
       kitowall: $("mod-kitowall").checked,
       kilivepaper: $("mod-kilivepaper").checked,
       kisddm: $("mod-kisddm").checked,
     };
-    runInstall("install_kito", { selection, password: $("kito-pass").value });
+    const elegidos = Object.entries(selection)
+      .filter(([, on]) => on)
+      .map(([nombre]) => nombre);
+    guardedRun(
+      {
+        title: "Instalar el entorno Kito",
+        body: `Se instalaran KiUI y Kitsune Compositor${
+          elegidos.length ? `, ademas de: ${elegidos.join(", ")}` : ""
+        }.`,
+        detail: INSTALL_NOTE,
+        confirmLabel: "Instalar",
+      },
+      "install_kito",
+      { selection, password: $("kito-pass").value }
+    );
   });
 
   $("bauh-install").addEventListener("click", () => {
-    runInstall("install_bauh", { password: $("bauh-pass").value });
+    guardedRun(
+      {
+        title: "Instalar la Tienda Bauh Fork",
+        body:
+          "Se descargara el release firmado, se verificara su SHA-256 y se instalara aislado con pipx. " +
+          "Si tienes el paquete `bauh` de los repositorios, se DESINSTALARA para evitar conflictos.",
+        detail: INSTALL_NOTE,
+        confirmLabel: "Instalar",
+      },
+      "install_bauh",
+      { password: $("bauh-pass").value }
+    );
   });
 
   $("gekko-adb-install").addEventListener("click", () => {
-    runInstall("install_gekko_adb", { password: $("gekko-adb-pass").value });
+    guardedRun(
+      {
+        title: "Instalar Gekko ADB Studio",
+        body: "Se clonara el codigo del repositorio y se ejecutara su instalador, que crea el lanzador, la entrada de menu y el icono.",
+        detail: INSTALL_NOTE,
+        confirmLabel: "Instalar",
+      },
+      "install_gekko_adb",
+      { password: $("gekko-adb-pass").value }
+    );
   });
 
   $("gekkoapp-install").addEventListener("click", () => {
-    runInstall("install_gekkoapp", {});
+    guardedRun(
+      {
+        title: "Actualizar GekkoApp",
+        body: "Se descargara el ultimo release firmado de GekkoApp y se reemplazaran sus binarios en tu carpeta de usuario.",
+        detail: "No requiere sudo. Tendras que reiniciar el Control Center al terminar.",
+        confirmLabel: "Actualizar",
+      },
+      "install_gekkoapp",
+      {}
+    );
   });
 
   $("terminal-install").addEventListener("click", () => {
-    runInstall("install_terminal", { password: $("terminal-pass").value });
+    guardedRun(
+      {
+        title: "Instalar Terminal Bonita",
+        body:
+          "Se instalaran ZSH, Starship, Kitty y sus plugins, y se sobrescribiran tres archivos tuyos: " +
+          "~/.zshrc, ~/.config/starship.toml y ~/.config/fastfetch/config.jsonc. " +
+          "Ademas se cambiara tu SHELL DE LOGIN a /bin/zsh usando sudo.",
+        detail:
+          "De cada archivo se guarda antes una copia con marca de tiempo junto al original. " +
+          INSTALL_NOTE,
+        confirmLabel: "Instalar",
+      },
+      "install_terminal",
+      { password: $("terminal-pass").value }
+    );
   });
 
   $("hyprland-install").addEventListener("click", () => {
-    runInstall("install_hyprland", { password: $("hyprland-pass").value });
+    guardedRun(
+      {
+        title: "Instalar el preset Hyprland",
+        body: "Se instalaran las herramientas del preset y se DESINSTALARAN dolphin, polkit-kde-agent y wofi si los tienes.",
+        detail: INSTALL_NOTE,
+        confirmLabel: "Instalar",
+      },
+      "install_hyprland",
+      { password: $("hyprland-pass").value }
+    );
   });
 
   $("niri-install").addEventListener("click", () => {
-    runInstall("install_niri", { password: $("niri-pass").value });
+    guardedRun(
+      {
+        title: "Instalar el preset Niri",
+        body: "Se instalaran las herramientas del preset y se DESINSTALARAN mako, swaybg, swayidle, swaylock y waybar si los tienes.",
+        detail: INSTALL_NOTE,
+        confirmLabel: "Instalar",
+      },
+      "install_niri",
+      { password: $("niri-pass").value }
+    );
   });
 
   $("gaming-install").addEventListener("click", () => {
-    runInstall("install_gaming_setup", {
-      gpu: $("gaming-gpu").value,
-      password: $("gaming-pass").value,
-    });
+    const gpu = $("gaming-gpu").value;
+    guardedRun(
+      {
+        title: "Instalar el Gaming Setup",
+        body: `Se instalara el driver Vulkan de ${gpu.toUpperCase()}, Steam y las utilidades gaming.`,
+        detail: INSTALL_NOTE,
+        confirmLabel: "Instalar",
+      },
+      "install_gaming_setup",
+      { gpu, password: $("gaming-pass").value }
+    );
   });
 
   $("chaotic-install").addEventListener("click", () => {
-    runInstall("install_chaotic_aur", { password: $("chaotic-pass").value });
+    guardedRun(
+      {
+        title: "Configurar Chaotic AUR",
+        body: "Se anadira el repositorio Chaotic AUR a /etc/pacman.conf (con copia de seguridad) y se actualizara el sistema.",
+        detail: INSTALL_NOTE,
+        confirmLabel: "Configurar",
+      },
+      "install_chaotic_aur",
+      { password: $("chaotic-pass").value }
+    );
   });
 
   $("kito-uninstall")?.addEventListener("click", () => {
-    runInstall("uninstall_kito", {});
+    guardedRun(
+      {
+        title: "Desinstalar el entorno Kito",
+        body: "Se retiraran los modulos de Kito registrados por GekkoApp: sus lanzadores, entradas de menu, iconos y las versiones instaladas.",
+        detail: "Solo se borra lo que GekkoApp instalo y tiene registrado.",
+        confirmLabel: "Desinstalar",
+        danger: true,
+      },
+      "uninstall_kito",
+      {}
+    );
   });
 
   $("bauh-uninstall")?.addEventListener("click", () => {
-    runInstall("uninstall_bauh", {});
+    guardedRun(
+      {
+        title: "Desinstalar la Tienda Bauh Fork",
+        body: "Se eliminara el entorno pipx de Bauh Fork y su integracion de escritorio.",
+        detail: "Tu configuracion de Bauh en ~/.config no se toca.",
+        confirmLabel: "Desinstalar",
+        danger: true,
+      },
+      "uninstall_bauh",
+      {}
+    );
   });
 
   $("gekko-adb-uninstall")?.addEventListener("click", () => {
-    runInstall("uninstall_gekko_adb", {});
+    guardedRun(
+      {
+        title: "Desinstalar Gekko ADB Studio",
+        body: "Se eliminaran el lanzador, las entradas de menu, el icono y los archivos de la aplicacion.",
+        detail: "Tus presets y logs en ~/.config y ~/.local/state se conservan.",
+        confirmLabel: "Desinstalar",
+        danger: true,
+      },
+      "uninstall_gekko_adb",
+      {}
+    );
   });
 
   $("terminal-uninstall")?.addEventListener("click", () => {
-    runInstall("uninstall_terminal", {});
+    guardedRun(
+      {
+        title: "Desinstalar Terminal Bonita",
+        body: "Se ELIMINARA tu archivo ~/.zshrc.",
+        detail: "Antes se guarda una copia con marca de tiempo junto al original. Los paquetes (zsh, starship, kitty...) se conservan.",
+        confirmLabel: "Eliminar ~/.zshrc",
+        danger: true,
+      },
+      "uninstall_terminal",
+      {}
+    );
   });
 
   $("hyprland-uninstall")?.addEventListener("click", () => {
-    runInstall("uninstall_hyprland", { password: $("hyprland-pass").value });
+    guardedRun(
+      {
+        title: "Desinstalar el preset Hyprland",
+        body: "Se desinstalaran las herramientas propias del preset (nwg-look, xwayland-satellite).",
+        detail: "Las dependencias de escritorio compartidas se conservan. Veras el plan exacto en el Progreso.",
+        confirmLabel: "Desinstalar",
+        danger: true,
+      },
+      "uninstall_hyprland",
+      { password: $("hyprland-pass").value }
+    );
   });
 
   $("niri-uninstall")?.addEventListener("click", () => {
-    runInstall("uninstall_niri", { password: $("niri-pass").value });
+    guardedRun(
+      {
+        title: "Desinstalar el preset Niri",
+        body: "Se desinstalaran las herramientas propias del preset (nwg-look, xwayland-satellite, dconf-editor).",
+        detail: "El compositor niri y las dependencias compartidas se conservan.",
+        confirmLabel: "Desinstalar",
+        danger: true,
+      },
+      "uninstall_niri",
+      { password: $("niri-pass").value }
+    );
   });
 
   $("gaming-uninstall")?.addEventListener("click", () => {
-    runInstall("uninstall_gaming_setup", { password: $("gaming-pass").value });
+    guardedRun(
+      {
+        title: "Desinstalar el Gaming Setup",
+        body: "Se desinstalaran gamemode, mangohud y los gestores de Proton.",
+        detail: "Steam, Discord y Flatpak se conservan.",
+        confirmLabel: "Desinstalar",
+        danger: true,
+      },
+      "uninstall_gaming_setup",
+      { password: $("gaming-pass").value }
+    );
   });
 
 

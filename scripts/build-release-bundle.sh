@@ -34,6 +34,28 @@ for bin in "$CRATE_DIR/target/release/gekkoapp" "$CRATE_DIR/target/release/gekko
   [ -x "$bin" ] || { echo "error: falta $bin (compila primero)" >&2; exit 1; }
 done
 
+# glibc minima real: se deduce de los simbolos versionados que exigen los
+# binarios en vez de fijar un numero a mano. Un valor demasiado bajo hace que el
+# motor de instalacion acepte el release en un sistema donde no puede arrancar.
+detect_glibc_minimum() {
+  local max="2.17" candidate
+  if ! command -v objdump >/dev/null 2>&1; then
+    printf '%s' "${GLIBC_MINIMUM:-2.34}"
+    return
+  fi
+  for bin in "$@"; do
+    candidate="$(objdump -T "$bin" 2>/dev/null \
+      | sed -n 's/.*GLIBC_\([0-9][0-9.]*\).*/\1/p' | sort -V | tail -n1)"
+    [ -n "$candidate" ] || continue
+    max="$(printf '%s\n%s\n' "$max" "$candidate" | sort -V | tail -n1)"
+  done
+  printf '%s' "$max"
+}
+
+GLIBC_MINIMUM="${GLIBC_MINIMUM:-$(detect_glibc_minimum \
+  "$CRATE_DIR/target/release/gekkoapp" "$CRATE_DIR/target/release/gekkoapp-gui")}"
+echo "==> glibc minima detectada: $GLIBC_MINIMUM"
+
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 ROOT="$PRODUCT_ID-$VERSION"
@@ -61,7 +83,7 @@ printf '%s  %s\n' "$ARCHIVE_SHA256" "$ARCHIVE" > "$DIST_DIR/$PRODUCT_ID-$VERSION
 # Genera el manifest sobre el arbol real extraido.
 EXTRACT="$(mktemp -d)"
 tar --zstd -xf "$DIST_DIR/$ARCHIVE" -C "$EXTRACT"
-python3 - "$EXTRACT" "$DIST_DIR" "$ARCHIVE" "$TAG" "$VERSION" "$REPOSITORY" "$TARGET" "$APP_ID" "$ARCHIVE_SIZE" "$ARCHIVE_SHA256" "$ROOT" <<'PYEOF'
+python3 - "$EXTRACT" "$DIST_DIR" "$ARCHIVE" "$TAG" "$VERSION" "$REPOSITORY" "$TARGET" "$APP_ID" "$ARCHIVE_SIZE" "$ARCHIVE_SHA256" "$ROOT" "$GLIBC_MINIMUM" <<'PYEOF'
 import hashlib, json, os, stat, sys
 
 extract, dist_dir, archive = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -69,6 +91,7 @@ tag, version = sys.argv[4], sys.argv[5]
 repository, target = sys.argv[6], sys.argv[7]
 app_id, archive_size, archive_sha256 = sys.argv[8], int(sys.argv[9]), sys.argv[10]
 root = sys.argv[11]
+glibc_minimum = sys.argv[12]
 
 tree = os.path.join(extract, root)
 payload = []
@@ -109,7 +132,7 @@ manifest = {
     "release": {"tag": tag, "channel": "stable"},
     "platform": {
         "os": "linux", "arch": "x86_64", "target": target,
-        "libc": {"family": "glibc", "minimum": "2.34"},
+        "libc": {"family": "glibc", "minimum": glibc_minimum},
     },
     "artifact": {
         "file_name": archive, "format": "tar.zst",

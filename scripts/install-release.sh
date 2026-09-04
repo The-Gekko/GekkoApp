@@ -24,7 +24,6 @@ REPO="The-Gekko/GekkoApp"
 TARGET="x86_64-unknown-linux-gnu"
 APP_ID="org.thegekko.gekkoapp"
 PRODUCT="gekkoapp"
-RAW_BASE="https://raw.githubusercontent.com/$REPO/main/scripts/install-release.sh"
 
 # ---------------------------------------------------------------------------
 # Configuracion y rutas XDG (espejan src/installer.rs)
@@ -35,7 +34,21 @@ LAUNCH=1
 MODE="install"
 
 usage() {
-  sed -n '1,20p' "$0" | sed 's/^# \{0,1\}//' | sed '/^$/d'
+  # No se lee de "$0": bajo el one-liner documentado (`curl ... | bash`) "$0"
+  # es "bash" y la ayuda saldria vacia o con el contenido equivocado.
+  cat <<'AYUDA'
+install-release.sh — Instala el Control Center de GekkoApp (GUI) desde el
+release firmado de GitHub, sin compilar.
+
+  --version <vX.Y.Z>   Instala una version concreta (por defecto: ultima).
+  --prefix <dir>       Prefijo de instalacion (default: $HOME/.local).
+  --no-launch          No abrir el Control Center al terminar.
+  --uninstall          Desinstala la version instalada.
+  --help               Muestra esta ayuda.
+
+Seguridad: solo HTTPS y verificacion del SHA-256 del artefacto contra su
+manifiesto antes de tocar el sistema.
+AYUDA
 }
 
 while [ $# -gt 0 ]; do
@@ -52,7 +65,10 @@ done
 HOME_DIR="${HOME:?se requiere \$HOME}"
 DATA_HOME="${XDG_DATA_HOME:-$HOME_DIR/.local/share}"
 BIN_HOME="${XDG_BIN_HOME:-$PREFIX/bin}"
-VERSIONS_HOME="${XDG_LIB_HOME:-$HOME_DIR/.local/lib/kitotsu}"
+# `installer.rs` (InstallPaths::detect) fija la raiz de versiones en
+# $HOME/.local/lib/kitotsu y NO consulta XDG_LIB_HOME. El script tiene que usar
+# exactamente la misma ruta o Rust y el script gestionarian arboles distintos.
+VERSIONS_HOME="$HOME_DIR/.local/lib/kitotsu"
 PRODUCT_HOME="$VERSIONS_HOME/$PRODUCT"
 APPS_DIR="$DATA_HOME/applications"
 ICON_DIR="$DATA_HOME/icons/hicolor/512x512/apps"
@@ -79,23 +95,29 @@ resolve_latest_tag() {
 # ---------------------------------------------------------------------------
 # Desinstalar
 # ---------------------------------------------------------------------------
-uninstall() {
-  local active_root=""
-  if [ -d "$PRODUCT_HOME" ]; then
-    active_root="$(cd "$PRODUCT_HOME" && find . -mindepth 1 -maxdepth 1 -type d | sort | tail -n1)"
-    [ -n "$active_root" ] && active_root="$PRODUCT_HOME/${active_root#./}"
-  fi
+# ¿Este enlace apunta a alguna version instalada de GekkoApp?
+owned_link() {
+  local link="$1" target
+  [ -L "$link" ] || return 1
+  # `readlink -m` en vez de `-f`: `-f` devuelve vacio cuando el enlace esta roto
+  # (la version a la que apunta ya no existe), y entonces un enlace nuestro se
+  # tomaba por ajeno y se quedaba colgando.
+  target="$(readlink -m "$link" 2>/dev/null || true)"
+  [ -n "$target" ] && [ "${target#"$PRODUCT_HOME"/}" != "$target" ]
+}
 
-  if [ -L "$BIN_HOME/$GUI_NAME" ]; then
-    local target
-    target="$(readlink -f "$BIN_HOME/$GUI_NAME")"
-    if [ -n "$active_root" ] && [ "${target#"$active_root"/}" != "$target" ]; then
-      rm -f "$BIN_HOME/$GUI_NAME"
-      info "eliminado $BIN_HOME/$GUI_NAME"
-    else
-      say "  aviso: $BIN_HOME/$GUI_NAME no apunta a GekkoApp; no se toca"
+uninstall() {
+  # Se compara contra $PRODUCT_HOME entero: adivinar la "version activa" por
+  # orden lexicografico dejaba el enlace sin borrar y colgando tras el rm -rf.
+  local link
+  for link in "$BIN_HOME/$GUI_NAME" "$BIN_HOME/gekkoapp"; do
+    if owned_link "$link"; then
+      rm -f "$link"
+      info "eliminado $link"
+    elif [ -L "$link" ]; then
+      say "  aviso: $link no apunta a GekkoApp; no se toca"
     fi
-  fi
+  done
   [ -f "$DESKTOP_FILE" ] && rm -f "$DESKTOP_FILE" && info "eliminado $DESKTOP_FILE"
   [ -f "$ICON_DIR/$APP_ID.png" ] && rm -f "$ICON_DIR/$APP_ID.png" && info "eliminado $ICON_DIR/$APP_ID.png"
   [ -f "$SYMBOLIC_DIR/$APP_ID-symbolic.svg" ] && rm -f "$SYMBOLIC_DIR/$APP_ID-symbolic.svg" && info "eliminado $SYMBOLIC_DIR/$APP_ID-symbolic.svg"
@@ -131,6 +153,10 @@ fi
 
 # Base por release; GEKKOAPP_RELEASE_BASE permite espejos/probar en local.
 RELEASE_BASE="${GEKKOAPP_RELEASE_BASE:-https://github.com/$REPO/releases/download/v$TAG}"
+case "$RELEASE_BASE" in
+  https://*) ;;
+  *) fail "solo se permiten descargas HTTPS: $RELEASE_BASE" ;;
+esac
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
@@ -144,6 +170,14 @@ VERSION_FIELD="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))
 ARCHIVE_NAME="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["artifact"]["file_name"])' "$TMP/manifest.json")"
 ARCHIVE_SIZE="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["artifact"]["size_bytes"])' "$TMP/manifest.json")"
 ARCHIVE_SHA="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["artifact"]["sha256"])' "$TMP/manifest.json")"
+
+# Los campos del manifiesto se usan como nombre de archivo y de directorio:
+# se exige que sean nombres simples, sin separadores de ruta.
+for field in "$VERSION_FIELD" "$ARCHIVE_NAME"; do
+  case "$field" in
+    ""|*/*|.|..) fail "el manifiesto declara un valor no valido: '$field'" ;;
+  esac
+done
 
 info "Version: $VERSION_FIELD"
 info "Descargando artefacto ($ARCHIVE_NAME)..."
@@ -172,13 +206,25 @@ fi
 mkdir -p "$BIN_HOME" "$APPS_DIR" "$ICON_DIR" "$SYMBOLIC_DIR"
 
 # Entrypoint: symlink propio en ~/.local/bin (no se pisa una ruta ajena).
+# Un enlace que apunte a CUALQUIER version bajo $PRODUCT_HOME es nuestro: antes
+# se exigia que apuntase ya a la version nueva, asi que toda actualizacion
+# terminaba en "no se sobreescribira una ruta ajena".
 GUI_LINK="$BIN_HOME/$GUI_NAME"
-if [ -e "$GUI_LINK" ] || [ -L "$GUI_LINK" ]; then
-  if [ "$(readlink -f "$GUI_LINK")" != "$(readlink -f "$FINAL_ROOT/bin/$GUI_NAME")" ]; then
-    fail "no se sobreescribira una ruta ajena: $GUI_LINK"
+DESIRED_TARGET="$(readlink -m "$FINAL_ROOT/bin/$GUI_NAME")"
+if [ -L "$GUI_LINK" ]; then
+  # `-m` resuelve tambien los enlaces rotos: con `-f`, un enlace a una version
+  # ya borrada devolvia vacio y abortaba la instalacion como "ruta ajena".
+  CURRENT_TARGET="$(readlink -m "$GUI_LINK" 2>/dev/null || true)"
+  if [ "$CURRENT_TARGET" != "$DESIRED_TARGET" ] \
+     && [ "${CURRENT_TARGET#"$PRODUCT_HOME"/}" = "$CURRENT_TARGET" ]; then
+    fail "no se sobreescribira una ruta ajena: $GUI_LINK -> ${CURRENT_TARGET:-?}"
   fi
+elif [ -e "$GUI_LINK" ]; then
+  # Instalacion previa desde el codigo fuente (scripts/install.sh copia un
+  # binario regular). Es nuestra: se adopta, igual que hace installer.rs.
+  info "Reemplazando el $GUI_NAME instalado desde el codigo fuente."
 fi
-ln -sf "$FINAL_ROOT/bin/$GUI_NAME" "$GUI_LINK"
+ln -sfn "$FINAL_ROOT/bin/$GUI_NAME" "$GUI_LINK"
 info "Instalado: $GUI_LINK"
 
 # Entrada de menu materializada (token @EXECUTABLE@ -> ruta real).

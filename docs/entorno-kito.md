@@ -26,19 +26,41 @@ responsabilidad corresponde a los CLI y a Kitsune Compositor.
     valida cada archivo contra el manifest.
 12. Activa los entrypoints y la integracion de escritorio, y registra el estado.
 
-## Matriz soportada en la primera version
+## Matriz soportada
 
-| Dimension | Soporte |
-| --- | --- |
-| Distribucion | Arch Linux y derivadas |
-| Arquitectura | x86_64 |
-| Sesion | Wayland |
-| Escritorio | Hyprland |
-| Servicios | systemd de usuario |
-| Target | x86_64-unknown-linux-gnu |
+El gate de entorno vive en `environment.rs::refresh_compatibility` (es el que
+decide si la tarjeta de Kito esta disponible):
 
-La deteccion de Ubuntu/Debian, Fedora, GNOME, KDE y Niri existe para generar un
-diagnostico correcto, pero todavia no habilita su instalacion.
+| Dimension | Requisito | ¿Bloquea la instalacion? |
+| --- | --- | --- |
+| Distribucion | Arch Linux (o `ID_LIKE=arch`) o Solus | Si |
+| Arquitectura | x86_64 | Si |
+| Servicios | systemd de usuario | Si |
+| Sesion | Wayland recomendada | No |
+| Escritorio | Hyprland recomendado | No |
+| Target | x86_64-unknown-linux-gnu | Si |
+
+La sesion y el escritorio se detectan y se muestran en el diagnostico, pero ya
+no bloquean la instalacion: el requisito de Wayland + Hyprland se retiro. La
+deteccion de Ubuntu/Debian, Fedora, GNOME y KDE existe para dar un diagnostico
+correcto, pero esas distribuciones siguen sin estar soportadas.
+
+### Dependencias de host por distribucion
+
+`InstallationPlan::required_host_packages` traduce las capacidades obligatorias
+que declara cada manifest al gestor de paquetes de la distribucion:
+
+| Capacidad | Arch | Solus |
+| --- | --- | --- |
+| `runtime.qt6` | `qt6-base`, `qt6-declarative`, `qt6-wayland` | iguales |
+| `gpu.wgpu` | `vulkan-icd-loader`, `wayland`, `libxkbcommon` | `vulkan`, `wayland`, `libxkbcommon` |
+| `audio.pipewire` | `pipewire` | `pipewire` |
+| `renderer.awww` | `awww` | sin equivalente: se aborta antes de tocar nada |
+
+Ese mapeo es un **segundo** gate, posterior al de entorno: `install_kito_plan`
+aborta antes de descargar o instalar nada si alguna capacidad obligatoria del
+manifiesto no tiene paquete en la distribucion actual.
+| `session.wayland` | sin paquete | sin paquete |
 
 ## Repositorios resueltos
 

@@ -14,12 +14,12 @@
 - 🐧 **Soporte Multi-Distro (Arch, Garuda y Solus)** — detecta `pacman` y `eopkg` automáticamente y adapta los paquetes, plugins y vistas.
 - 🗑️ **Desinstalación limpia e idempotente** — desinstala Kito, Bauh, Gekko ADB, Terminal Bonita, Presets y Gaming desde la GUI o el CLI sin dejar residuos.
 - 🦊 **Entorno Kito** — KiUI, Kitsune Compositor y módulos (Kitowall, Kilivepaper, KiSDDM) desde releases firmados.
-- 🛍️ **Tienda Bauh Fork** — instalación aislada con `pipx`, con verificación SHA-256.
+- 🛍️ **Tienda Bauh Fork** — instalación aislada con `pipx` (paquete `gekko-bauh`), con verificación SHA-256.
 - 📱 **Gekko ADB Studio** — suite GTK de control ADB (scrcpy, shell, debloat y presets).
 - 🔄 **Auto-update de GekkoApp** — la app se actualiza a sí misma desde un release firmado, sin sudo.
 - 💻 **Terminal Bonita** — ZSH + Starship + plugins por **𝓲𝓑𝓵𝓾𝓮𝓜𝓸𝓸𝓷**.
 - 🪟 **Presets Hyprland y Niri** — herramientas y dependencias listas (Arch Linux).
-- 🎮 **Gaming Setup** — NVIDIA, Intel o AMD (optimizado para Arch y Solus).
+- 🎮 **Gaming Setup** — instala el driver Vulkan de tu GPU (NVIDIA, Intel o AMD), Steam y utilidades; los extras que no estén en tus repositorios (ProtonPlus, Spotify, DXVK) se omiten con aviso en vez de abortar.
 - 📦 **Chaotic AUR** — repositorios optimizados en un clic (Arch Linux).
 - 🎨 **Tema adaptativo** — sigue la paleta de matugen en vivo (Material You).
 
