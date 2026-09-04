@@ -12,3 +12,6 @@ SHA256SUMS.txt
 
 # Notas internas del agente: no se suben al repositorio.
 /AGENTS.md
+
+# Salida de la herramienta graphify (analisis de grafo y cache de AST): generada, no se versiona.
+/graphify-out/
