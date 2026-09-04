@@ -4,13 +4,24 @@ use crate::installer::{
 };
 use crate::kito::ComponentId;
 
+/// Id de producto del release. NO sigue al nombre del repositorio: es el
+/// prefijo de los nombres de artefacto ya publicados
+/// (`bauh-fork-the-gekko-<target>.manifest.json`), asi que cambiarlo dejaria
+/// sin resolver los releases existentes.
 pub const BAUH_PRODUCT_ID: &str = "bauh-fork-the-gekko";
-pub const BAUH_REPOSITORY: &str = "The-Gekko/Bauh-Fork-The-Gekko";
+/// El repositorio se renombro de `Bauh-Fork-The-Gekko` a `The-Gekko-Bauh`.
+/// GitHub redirige el nombre viejo, pero deja de hacerlo en cuanto alguien crea
+/// un repositorio con ese nombre, asi que se apunta al real.
+pub const BAUH_REPOSITORY: &str = "The-Gekko/The-Gekko-Bauh";
+/// Nombres anteriores del repositorio. Los releases publicados antes del
+/// renombrado llevan el nombre viejo en `product.repository`, y sin aceptarlo
+/// la validacion de identidad los rechazaria.
+pub const BAUH_LEGACY_REPOSITORIES: &[&str] = &["The-Gekko/Bauh-Fork-The-Gekko"];
 pub const BAUH_LABEL: &str = "Bauh Fork (The-Gekko)";
 
 /// Nombre de la distribucion Python con la que pipx registra el fork.
 ///
-/// Es el `[project] name` de `pyproject.toml` en The-Gekko/Bauh-Fork-The-Gekko.
+/// Es el `[project] name` de `pyproject.toml` en The-Gekko/The-Gekko-Bauh.
 /// pipx crea y desinstala el entorno por ese nombre: ni el id de producto del
 /// release (`bauh-fork-the-gekko`) ni el del paquete importable (`bauh`) sirven
 /// para `pipx uninstall`.
@@ -117,6 +128,7 @@ pub fn resolve_bauh_plan(target: &str) -> Result<InstallationPlan, String> {
             label: BAUH_LABEL,
             product_id: BAUH_PRODUCT_ID,
             repository: BAUH_REPOSITORY,
+            legacy_repositories: BAUH_LEGACY_REPOSITORIES,
         },
         &tag,
         target,
@@ -152,6 +164,7 @@ pub fn resolve_gekkoapp_plan(target: &str) -> Result<InstallationPlan, String> {
             label: GEKKOAPP_LABEL,
             product_id: GEKKOAPP_PRODUCT_ID,
             repository: GEKKOAPP_REPOSITORY,
+            legacy_repositories: &[],
         },
         &tag,
         target,
@@ -177,6 +190,6 @@ mod tests {
         assert_eq!(release.manifest.install_method, "python_pipx");
         assert!(release
             .manifest_url
-            .starts_with("https://github.com/The-Gekko/Bauh-Fork-The-Gekko/"));
+            .starts_with("https://github.com/The-Gekko/The-Gekko-Bauh/"));
     }
 }

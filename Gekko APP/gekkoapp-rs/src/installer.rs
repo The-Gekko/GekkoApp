@@ -152,6 +152,11 @@ pub struct ComponentIdentity<'a> {
     pub label: &'a str,
     pub product_id: &'a str,
     pub repository: &'a str,
+    /// Nombres anteriores del repositorio. Un repositorio renombrado sigue
+    /// sirviendo los releases publicados antes del cambio, y esos manifiestos
+    /// llevan grabado el nombre viejo en `product.repository`: sin aceptarlo,
+    /// la validacion de identidad rechazaria un release legitimo.
+    pub legacy_repositories: &'a [&'a str],
 }
 
 impl PreparedRelease {
@@ -200,11 +205,13 @@ impl PreparedRelease {
         artifact_url: &str,
         manifest: ArtifactManifest,
     ) -> Result<Self, String> {
+        let mut accepted_repositories = vec![identity.repository];
+        accepted_repositories.extend_from_slice(identity.legacy_repositories);
         validate_manifest(
             &manifest,
             identity.label,
             identity.product_id,
-            identity.repository,
+            &accepted_repositories,
             tag,
             target,
         )?;
@@ -328,7 +335,7 @@ impl InstallationPlan {
                 &manifest,
                 status.component.label(),
                 status.component.product_id(),
-                status.component.repository(),
+                &[status.component.repository()],
                 tag,
                 target,
             )?;
@@ -1315,7 +1322,7 @@ fn validate_manifest(
     manifest: &ArtifactManifest,
     component_label: &str,
     expected_product_id: &str,
-    expected_repository: &str,
+    accepted_repositories: &[&str],
     expected_tag: &str,
     expected_target: &str,
 ) -> Result<(), String> {
@@ -1326,7 +1333,9 @@ fn validate_manifest(
         return Err("contrato de distribucion no soportado".into());
     }
     if manifest.product.id != expected_product_id
-        || manifest.product.repository != expected_repository
+        || !accepted_repositories
+            .iter()
+            .any(|repository| manifest.product.repository == *repository)
     {
         return Err(format!(
             "identidad de producto invalida para {}",
@@ -1766,7 +1775,7 @@ mod tests {
             &manifest,
             crate::core::catalog::BAUH_LABEL,
             crate::core::catalog::BAUH_PRODUCT_ID,
-            crate::core::catalog::BAUH_REPOSITORY,
+            &[crate::core::catalog::BAUH_REPOSITORY],
             &tag,
             &target,
         )

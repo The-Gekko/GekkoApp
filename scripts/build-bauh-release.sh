@@ -36,7 +36,9 @@ TARGET="${2:-x86_64-unknown-linux-gnu}"
 DIST_DIR="${3:-$BAUH_REPO_ROOT/releases/dist}"
 
 PRODUCT_ID="bauh-fork-the-gekko"
-REPOSITORY="The-Gekko/Bauh-Fork-The-Gekko"
+# El repositorio se renombro a The-Gekko-Bauh; el PRODUCT_ID se mantiene
+# porque es el prefijo de los artefactos ya publicados.
+REPOSITORY="The-Gekko/The-Gekko-Bauh"
 APP_ID="org.thegekko.bauh"
 GLIBC_MINIMUM="${GLIBC_MINIMUM:-2.34}"
 ICON_SIZE=512
