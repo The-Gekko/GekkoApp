@@ -95,7 +95,11 @@ pub fn resolve_releases(components: &[ComponentId], target: &str) -> Vec<Release
 }
 
 fn resolve_release(component: ComponentId, target: &str) -> ReleaseStatus {
-    let state = match crate::core::github::resolve_latest_release(component.repository(), target) {
+    let state = match crate::core::github::resolve_latest_release(
+        component.repository(),
+        component.product_id(),
+        target,
+    ) {
         Ok((tag, manifest_url, asset_urls)) => ReleaseState::Available {
             version: tag.trim_start_matches('v').to_string(),
             tag,
