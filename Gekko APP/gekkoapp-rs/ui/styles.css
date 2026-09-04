@@ -361,3 +361,70 @@ button:disabled {
   color: #c9a1ff;
   font-weight: 700;
 }
+
+/* ── Dialogo de confirmacion previo a cualquier mutacion ─────────────────── */
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.62);
+}
+
+.modal {
+  width: min(520px, 100%);
+  max-height: 100%;
+  overflow-y: auto;
+  padding: 22px 24px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
+}
+
+.modal h3 {
+  margin: 0 0 10px;
+  font-size: 16px;
+  color: var(--text);
+}
+
+.modal-body {
+  margin: 0 0 10px;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+.modal-detail {
+  margin: 0;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.modal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+/* Los botones del dialogo no comparten el reparto al 50% de las tarjetas. */
+.modal-actions button {
+  flex: 0 1 auto;
+  min-width: 130px;
+}
+
+button.btn-ghost {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+button.btn-ghost:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--accent);
+}
