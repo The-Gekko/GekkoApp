@@ -74,7 +74,9 @@ fn parse_define_colors(content: &str) -> BTreeMap<String, String> {
 
 fn relative_luminance(hex: &str) -> Option<f64> {
     let hex = hex.trim_start_matches('#');
-    if hex.len() != 6 {
+    // `hex[i..i + 2]` rebana por bytes: sin comprobar que sea ASCII, un valor
+    // con caracteres multibyte en colors-gtk.css entraria en panico.
+    if hex.len() != 6 || !hex.is_ascii() {
         return None;
     }
     let channel = |i: usize| -> Option<f64> {

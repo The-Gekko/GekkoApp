@@ -1,7 +1,8 @@
 use crate::core::reporter::{Reporter, BOLD, DIM, FG_CYAN, FG_GREEN, FG_RED, FG_YELLOW, RESET};
 use crate::core::system::{
     check_arch_linux, configurar_fastfetch, desinstalar_paquetes, instalar_paquetes,
-    is_package_installed, is_solus_linux, print_detected_environment, run_shell, run_shell_piped,
+    instalar_paquetes_opcionales, is_package_installed, is_solus_linux, print_detected_environment,
+    run_shell, run_shell_piped, sudo_prefix,
 };
 use crate::environment::SystemEnvironment;
 use crate::installer::{InstallPaths, InstallationPlan};
@@ -122,7 +123,7 @@ pub fn install_zsh_starship(reporter: &dyn Reporter) -> bool {
     }
 
     if reporter.confirm("¿Deseas cambiar tu shell predeterminada a ZSH?")
-        && !run_shell("sudo chsh -s /bin/zsh $USER")
+        && !run_shell(&format!("{} chsh -s /bin/zsh \"$USER\"", sudo_prefix()))
     {
         reporter.err("Fallo al cambiar la shell.");
         return false;
@@ -136,21 +137,25 @@ pub fn install_zsh_starship(reporter: &dyn Reporter) -> bool {
 
 /// Construye el `~/.zshrc` con las rutas de plugins validas para la distro.
 ///
-/// Arch Linux: zsh-completions + history-substring-search y plugins bajo
-/// `/usr/share/zsh/plugins/`. Solus: las rutas difieren
-/// (`/usr/share/zsh-autosuggestions/`, fzf en `/usr/share/zsh/site-functions/`
-/// y zsh-syntax-highlighting en `site-functions`); history-substring-search y
-/// zsh-completions no estan empaquetados en los repos de Solus.
+/// Rutas verificadas contra los paquetes reales de cada distribucion:
+///
+/// - Arch: los plugins viven bajo `/usr/share/zsh/plugins/<nombre>/` y fzf en
+///   `/usr/share/fzf/`. `zsh-history-substring-search` solo existe aqui.
+/// - Solus: `zsh-autosuggestions` esta en `/usr/share/zsh-autosuggestions/` y
+///   `zsh-syntax-highlighting` en `/usr/share/zsh-syntax-highlighting/` (su
+///   receta usa `%make_install PREFIX=/usr`, que instala en
+///   `$PREFIX/share/$NAME`). `zsh-history-substring-search` no esta empaquetado.
+/// - En ambas, `zsh-completions` instala sus funciones en
+///   `/usr/share/zsh/site-functions`, que es el `fpath` que se anade.
 fn build_zshrc(solus: bool) -> String {
-    let fpath_line = if solus {
-        "fpath=(/usr/share/zsh/site-functions $fpath)"
-    } else {
-        "fpath=(/usr/share/zsh/plugins/zsh-completions/src $fpath)"
-    };
+    // zsh-completions instala sus funciones en /usr/share/zsh/site-functions
+    // tanto en Arch como en Solus; la ruta .../plugins/zsh-completions/src no
+    // existe en el paquete de Arch y dejaba un fpath muerto.
+    let fpath_line = "fpath=(/usr/share/zsh/site-functions $fpath)";
     let plugins = if solus {
         "source /usr/share/zsh-autosuggestions/zsh-autosuggestions.zsh\n\
          source /usr/share/fzf/key-bindings.zsh\n\
-         source /usr/share/zsh/site-functions/zsh-syntax-highlighting.zsh"
+         source /usr/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh"
     } else {
         "source /usr/share/zsh/plugins/zsh-autosuggestions/zsh-autosuggestions.zsh\n\
          source /usr/share/zsh/plugins/zsh-history-substring-search/zsh-history-substring-search.zsh\n\
@@ -268,7 +273,7 @@ pub fn install_hyprland(reporter: &dyn Reporter) -> bool {
             "nautilus",
             "fuse2",
             "ddcutil",
-            "i2c-dev",
+            "i2c-tools",
         ],
     ) {
         return false;
@@ -315,7 +320,7 @@ pub fn install_niri(reporter: &dyn Reporter) -> bool {
             "bolt",
             "fuse2",
             "ddcutil",
-            "i2c-dev",
+            "i2c-tools",
             "playerctl",
             "gpsd",
             "dconf-editor",
@@ -336,12 +341,30 @@ pub fn install_niri(reporter: &dyn Reporter) -> bool {
     true
 }
 
-pub fn install_gaming(reporter: &dyn Reporter, gpu: &str, vulkan_choice: &str) -> bool {
-    let label = match gpu {
-        "nvidia" => "INSTALANDO UTILIDADES GAMING  ·  NVIDIA",
-        "intel" => "INSTALANDO UTILIDADES GAMING  ·  INTEL",
-        "amd" => "INSTALANDO UTILIDADES GAMING  ·  AMD",
-        _ => "INSTALANDO UTILIDADES GAMING",
+pub fn install_gaming(reporter: &dyn Reporter, gpu: &str) -> bool {
+    // El proveedor de `vulkan-driver` se instala explicitamente segun la GPU
+    // elegida. Antes se respondia por posicion al prompt de pacman, lo que
+    // depende del orden de los proveedores y podia acabar instalando el driver
+    // equivocado. La GPU se valida antes de preguntar nada: no tiene sentido
+    // pedir confirmacion de una instalacion que no se puede hacer.
+    let (label, vulkan_packages): (&str, &[&str]) = match gpu {
+        "nvidia" => (
+            "INSTALANDO UTILIDADES GAMING  ·  NVIDIA",
+            &["nvidia-utils", "lib32-nvidia-utils"],
+        ),
+        "intel" => (
+            "INSTALANDO UTILIDADES GAMING  ·  INTEL",
+            &["vulkan-intel", "lib32-vulkan-intel"],
+        ),
+        "amd" => (
+            "INSTALANDO UTILIDADES GAMING  ·  AMD",
+            &["vulkan-radeon", "lib32-vulkan-radeon"],
+        ),
+        _ => {
+            reporter.header("INSTALANDO UTILIDADES GAMING");
+            reporter.err(&format!("GPU no soportada: {gpu}"));
+            return false;
+        }
     };
     reporter.header(label);
 
@@ -362,60 +385,53 @@ pub fn install_gaming(reporter: &dyn Reporter, gpu: &str, vulkan_choice: &str) -
         return install_gaming_solus(reporter);
     }
 
-    reporter.info("Instalando steam...");
-    let steam_cmd = format!(
-        "echo -e '{}\\ns' | sudo pacman -S --needed steam",
-        vulkan_choice
-    );
-    if !run_shell(&steam_cmd) {
-        reporter.warn("Steam no se pudo instalar correctamente o fue cancelado.");
+    reporter.info(&format!(
+        "Instalando el driver Vulkan de {}...",
+        gpu.to_uppercase()
+    ));
+    if !instalar_paquetes(reporter, vulkan_packages) {
+        reporter.err("No se pudo instalar el driver Vulkan; Steam no funcionaria correctamente.");
         return false;
     }
 
-    reporter.info("Instalando dxvk (seleccionando proveedor 1 automáticamente)...");
-    if !is_package_installed("dxvk-async-git") && !is_package_installed("dxvk-mingw-git") {
-        if !run_shell("echo '1' | sudo pacman -S --needed dxvk 2>&1") {
-            reporter.warn("Fallo al instalar dxvk.");
-            return false;
-        }
-    } else {
-        reporter.ok("dxvk ya está instalado. Saltando...");
-    }
-
-    reporter.info("Instalando dependencias de Proton GE (lib32-gstreamer)...");
-    if !instalar_paquetes(reporter, &["lib32-gstreamer", "lib32-gst-plugins-base"]) {
-        reporter.warn("Fallo al instalar dependencias de lib32.");
-        return false;
-    }
-
+    reporter.info("Instalando Steam y las utilidades base...");
     if !instalar_paquetes(
         reporter,
         &[
-            "protonplus",
-            "spotify",
-            "discord",
+            "steam",
+            "vulkan-icd-loader",
+            "lib32-vulkan-icd-loader",
             "gamemode",
             "gedit",
             "flatpak",
+            "discord",
         ],
     ) {
-        reporter.warn("Fallo al instalar algunas herramientas gaming.");
+        reporter.warn("Steam o sus utilidades base no se pudieron instalar.");
         return false;
     }
 
-    reporter.info("Instalando proton-ge-custom-bin...");
-    if !is_package_installed("proton-ge-custom-bin") {
-        let ok = run_shell("sudo pacman -S --needed --noconfirm proton-ge-custom-bin 2>&1");
-        if ok {
-            reporter.ok("proton-ge-custom-bin instalado.");
-        } else {
-            reporter.warn("proton-ge-custom-bin no pudo instalarse. Instálalo manualmente con: sudo pacman -S proton-ge-custom-bin");
-            return false;
-        }
+    // Extras que no estan en los repositorios oficiales de Arch (viven en
+    // Chaotic AUR o el AUR). Se omiten con aviso en vez de abortar: antes el
+    // flujo entero fallaba porque `dxvk`, `lib32-gstreamer` y
+    // `proton-ge-custom-bin` no existen en ningun repositorio.
+    let mut opcionales = vec!["protonplus", "mangohud", "spotify"];
+    if !is_package_installed("dxvk-async-git") && !is_package_installed("dxvk-mingw-git") {
+        opcionales.push("dxvk-mingw-git");
     } else {
-        reporter.ok("proton-ge-custom-bin ya está instalado.");
+        reporter.ok("DXVK ya está instalado. Saltando...");
+    }
+    reporter.info("Instalando extras opcionales...");
+    if !instalar_paquetes_opcionales(reporter, &opcionales) {
+        // Los que no existen se omiten en silencio; llegar aqui significa que
+        // alguno que SI estaba disponible no se pudo instalar.
+        reporter
+            .warn("Algunos extras opcionales no se instalaron. El resto del setup sigue en pie.");
     }
 
+    reporter.info(
+        "Proton GE se gestiona desde ProtonPlus (o ProtonUp-Qt por Flatpak): ábrelo y descarga la version que quieras.",
+    );
     reporter.ok("¡Proceso de instalación Gaming terminado!");
     thread::sleep(Duration::from_secs(2));
     true
@@ -481,12 +497,9 @@ pub fn install_bauh(
         .target()
         .ok_or_else(|| "No existe un target de release para esta arquitectura.".to_owned())?;
 
-    if is_package_installed("bauh") {
-        if solus {
-            return Err(
-                "Bauh no se distribuye en los repos de Solus; no hay conflicto.".to_owned(),
-            );
-        }
+    // En Solus no existe un paquete `bauh` en los repositorios, asi que no hay
+    // conflicto que resolver: se sigue adelante en vez de abortar.
+    if !solus && is_package_installed("bauh") {
         if require_confirmation
             && !reporter.confirm(
                 "¿Deseas desinstalar el bauh original de pacman para evitar conflictos con el fork?",
@@ -526,9 +539,10 @@ pub fn install_bauh(
         "¡Bauh Fork (The-Gekko) {version} instalado correctamente!"
     ));
     println!(
-        "      {}Ejecuta la tienda con: {}/bauh{}",
+        "      {}Ejecuta la tienda con: {}/{}{}",
         DIM,
         paths.bin_home.display(),
+        crate::core::catalog::BAUH_LAUNCHER,
         RESET
     );
     thread::sleep(Duration::from_secs(2));
@@ -616,16 +630,19 @@ pub fn install_gekko_adb(reporter: &dyn Reporter) -> Result<(), String> {
         "glib2",
         "xdg-utils",
     ];
+    // Nombres verificados contra el indice binario oficial de Solus: los
+    // anteriores (`python-3`, `gtk-3`, `gtk-4`, `glib-2`) no existen en eopkg y
+    // hacian fallar siempre la instalacion en Solus.
     let deps: &[&str] = if solus {
         &[
             "git",
-            "python-3",
+            "python3",
             "python-gobject",
-            "gtk-3",
-            "gtk-4",
+            "libgtk-3",
+            "libgtk-4",
             "android-tools",
             "scrcpy",
-            "glib-2",
+            "glib2",
             "xdg-utils",
         ]
     } else {
@@ -839,7 +856,15 @@ pub fn install_kito_plan(
 
     reporter.step("Descargando y validando manifiestos...");
     let installation = InstallationPlan::prepare(&statuses, target)?;
-    let packages = installation.required_arch_packages();
+    let (packages, unsupported) = installation.required_host_packages(is_solus_linux());
+    if !unsupported.is_empty() {
+        // Se aborta antes de descargar o instalar nada: no hay paquete para
+        // esas capacidades en esta distribucion.
+        return Err(format!(
+            "no se modifico el sistema: esta distribucion no tiene paquete para {}",
+            unsupported.join(", ")
+        ));
+    }
     reporter.ok("Preflight completo: manifests, dependencias y artefactos son coherentes.");
     println!();
     println!("  {}Componentes:{}", BOLD, RESET);
@@ -927,16 +952,67 @@ pub fn install_kito_environment(reporter: &dyn Reporter) {
 
 /// Desinstala Bauh Fork (The-Gekko).
 pub fn uninstall_bauh(reporter: &dyn Reporter) -> Result<(), String> {
+    use crate::core::catalog::{
+        BAUH_AMBIGUOUS_PIPX_DISTRIBUTION, BAUH_LAUNCHER, BAUH_LEGACY_LAUNCHERS,
+        BAUH_LEGACY_PIPX_DISTRIBUTIONS, BAUH_PIPX_DISTRIBUTION, BAUH_PRODUCT_ID,
+    };
+
     reporter.header("DESINSTALANDO TIENDA BAUH FORK");
     let paths = InstallPaths::detect()?;
-    let launcher = paths.bin_home.join("bauh");
-    if launcher.exists() || is_package_installed("bauh-fork-the-gekko") {
+
+    let mut lanzadores = vec![BAUH_LAUNCHER];
+    lanzadores.extend_from_slice(BAUH_LEGACY_LAUNCHERS);
+    let hay_instalacion = lanzadores
+        .iter()
+        .any(|nombre| paths.bin_home.join(nombre).exists());
+
+    if hay_instalacion {
         reporter.step("Ejecutando pipx uninstall...");
-        let _ = run_shell("pipx uninstall bauh-fork-the-gekko");
-        let _ = run_shell("pipx uninstall bauh");
+        // pipx desinstala por el nombre de la distribucion (`gekko-bauh`), no
+        // por el id de producto del release ni por el del ejecutable. Se
+        // intentan tambien los nombres que usaron versiones anteriores.
+        let mut distribuciones = vec![BAUH_PIPX_DISTRIBUTION];
+        distribuciones.extend_from_slice(BAUH_LEGACY_PIPX_DISTRIBUTIONS);
+        // Un entorno pipx llamado `bauh` a secas puede ser del proyecto
+        // original, instalado por el usuario por su cuenta. Solo se retira si
+        // GekkoApp tiene registrada su propia instalacion de Bauh Fork.
+        if crate::installer::is_module_registered(BAUH_PRODUCT_ID) {
+            distribuciones.push(BAUH_AMBIGUOUS_PIPX_DISTRIBUTION);
+        } else {
+            reporter.info(&format!(
+                "No se tocara un posible entorno pipx '{BAUH_AMBIGUOUS_PIPX_DISTRIBUTION}': \
+                 GekkoApp no tiene registrada esa instalacion como suya."
+            ));
+        }
+        let mut retirada = false;
+        for distribucion in distribuciones {
+            if run_shell_piped(&format!("pipx uninstall '{distribucion}' 2>&1")).0 {
+                reporter.ok(&format!("Entorno pipx '{distribucion}' eliminado."));
+                retirada = true;
+            }
+        }
+        if !retirada {
+            reporter.warn("pipx no reconocio ninguna instalacion previa de Bauh Fork.");
+        }
     }
-    crate::installer::uninstall_registered_module(crate::core::catalog::BAUH_PRODUCT_ID)?;
-    reporter.ok("Bauh Fork desinstalado correctamente.");
+
+    crate::installer::uninstall_registered_module(BAUH_PRODUCT_ID)?;
+
+    let restantes = lanzadores
+        .iter()
+        .filter(|nombre| paths.bin_home.join(nombre).exists())
+        .copied()
+        .collect::<Vec<_>>();
+    if restantes.is_empty() {
+        reporter.ok("Bauh Fork desinstalado correctamente.");
+    } else {
+        reporter.warn(&format!(
+            "Bauh Fork se retiro del estado, pero siguen ahi estos lanzadores en {}: {}. \
+             Elimina ese entorno con `pipx uninstall` si ya no lo usas.",
+            paths.bin_home.display(),
+            restantes.join(", ")
+        ));
+    }
     thread::sleep(Duration::from_secs(1));
     Ok(())
 }
@@ -953,11 +1029,22 @@ pub fn uninstall_gekko_adb(reporter: &dyn Reporter) -> Result<(), String> {
     if app_desktop.exists() {
         let _ = fs::remove_file(&app_desktop);
     }
-    let legacy_desktop = paths
-        .data_home
-        .join("applications/org.thegekko.gekko_adb.desktop");
-    if legacy_desktop.exists() {
-        let _ = fs::remove_file(&legacy_desktop);
+    // `GekkoADB.desktop` es el lanzador que dejaban versiones antiguas del
+    // instalador de Gekko ADB.
+    for legacy in [
+        "applications/GekkoADB.desktop",
+        "applications/org.thegekko.gekko_adb.desktop",
+    ] {
+        let legacy_desktop = paths.data_home.join(legacy);
+        if legacy_desktop.exists() {
+            let _ = fs::remove_file(&legacy_desktop);
+        }
+    }
+    // Metainfo AppStream que instala el propio proyecto conectado; sin borrarlo
+    // el centro de software seguia anunciando una aplicacion inexistente.
+    let metainfo = paths.data_home.join("metainfo/com.gekko.adb.metainfo.xml");
+    if metainfo.exists() {
+        let _ = fs::remove_file(&metainfo);
     }
     let icon_file = paths
         .data_home
@@ -978,6 +1065,7 @@ pub fn uninstall_gekko_adb(reporter: &dyn Reporter) -> Result<(), String> {
 /// Desinstala los modulos de Kito registrados.
 pub fn uninstall_kito_environment(reporter: &dyn Reporter) -> Result<(), String> {
     reporter.header("DESINSTALANDO ENTORNO KITO");
+    let mut fallos = Vec::new();
     for id in [
         "kitsune-compositor",
         "kiui",
@@ -985,7 +1073,16 @@ pub fn uninstall_kito_environment(reporter: &dyn Reporter) -> Result<(), String>
         "kilivepaper",
         "kisddm",
     ] {
-        let _ = crate::installer::uninstall_registered_module(id);
+        if let Err(error) = crate::installer::uninstall_registered_module(id) {
+            reporter.err(&format!("{id}: {error}"));
+            fallos.push(id);
+        }
+    }
+    if !fallos.is_empty() {
+        return Err(format!(
+            "no se pudieron retirar del todo estos modulos: {}",
+            fallos.join(", ")
+        ));
     }
     reporter.ok("Entorno Kito desinstalado correctamente.");
     thread::sleep(Duration::from_secs(1));
@@ -997,34 +1094,82 @@ pub fn uninstall_zsh_starship(reporter: &dyn Reporter) -> bool {
     reporter.header("DESINSTALANDO TERMINAL BONITA");
     let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
     let zshrc_path = format!("{}/.zshrc", home);
-    if std::path::Path::new(&zshrc_path).exists() {
-        let _ = std::fs::remove_file(&zshrc_path);
-        reporter.ok("Se ha eliminado el .zshrc configurado por GekkoApp.");
+    if !Path::new(&zshrc_path).exists() {
+        reporter.info("No hay ningun ~/.zshrc que retirar.");
+        return true;
     }
+
+    // `~/.zshrc` es un archivo del usuario: puede no haberlo escrito GekkoApp.
+    // Nunca se borra sin confirmar y sin dejar antes una copia recuperable.
+    reporter.warn(&format!("Se va a eliminar {zshrc_path}"));
+    reporter.info("Antes se guardara una copia con marca de tiempo en el mismo directorio.");
+    if !reporter.confirm("¿Eliminar tu ~/.zshrc?") {
+        reporter.info("Cancelado: tu ~/.zshrc no se ha tocado.");
+        return false;
+    }
+
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or_default();
+    let backup = format!("{zshrc_path}.backup_{timestamp}");
+    if let Err(error) = std::fs::copy(&zshrc_path, &backup) {
+        reporter.err(&format!(
+            "No se pudo respaldar .zshrc, se cancela la eliminacion: {error}"
+        ));
+        return false;
+    }
+    if let Err(error) = std::fs::remove_file(&zshrc_path) {
+        reporter.err(&format!("No se pudo eliminar .zshrc: {error}"));
+        return false;
+    }
+    reporter.ok(&format!(
+        "~/.zshrc eliminado. Copia de seguridad en {backup}"
+    ));
     true
 }
 
-/// Desinstala preset Hyprland.
+/// Desinstala el preset Hyprland.
+///
+/// Solo retira las herramientas propias del preset. Las dependencias de
+/// escritorio compartidas (portales XDG, gvfs, flatpak, nautilus, keyring...)
+/// se conservan a proposito: otras aplicaciones del sistema dependen de ellas.
+/// Antes se desinstalaban `wofi` y `dolphin`, que precisamente son los paquetes
+/// que el instalador del preset **retira**, asi que no revertia nada.
 pub fn uninstall_hyprland(reporter: &dyn Reporter) -> bool {
     reporter.header("DESINSTALANDO PRESET HYPRLAND");
-    reporter.info("Eliminando dependencias especificas del preset...");
-    desinstalar_paquetes(reporter, &["wofi", "dolphin"])
+    reporter.info("Se retiran solo las herramientas propias del preset.");
+    reporter.info("Las dependencias de escritorio compartidas se conservan.");
+    desinstalar_paquetes(reporter, &["nwg-look", "xwayland-satellite"])
 }
 
-/// Desinstala preset Niri.
+/// Desinstala el preset Niri.
+///
+/// Nunca retira el paquete `niri`: el preset no lo instala y el usuario puede
+/// estar ejecutando esa sesion ahora mismo.
 pub fn uninstall_niri(reporter: &dyn Reporter) -> bool {
     reporter.header("DESINSTALANDO PRESET NIRI");
-    reporter.info("Eliminando dependencias especificas del preset...");
-    desinstalar_paquetes(reporter, &["niri", "mako"])
+    reporter.info("Se retiran solo las herramientas propias del preset.");
+    reporter.info("El compositor `niri` y las dependencias compartidas se conservan.");
+    desinstalar_paquetes(
+        reporter,
+        &["nwg-look", "xwayland-satellite", "dconf-editor"],
+    )
 }
 
-/// Desinstala preset Gaming.
+/// Desinstala el preset Gaming.
+///
+/// Retira las utilidades que instala el preset. Steam, Discord y Flatpak se
+/// conservan: son aplicaciones de uso general y quitarlas seria una sorpresa.
 pub fn uninstall_gaming(reporter: &dyn Reporter) -> bool {
     reporter.header("DESINSTALANDO GAMING SETUP");
+    reporter.info("Steam, Discord y Flatpak se conservan.");
+    // `protonup-qt` solo aparece aqui para limpiar instalaciones antiguas del
+    // preset; `desinstalar_paquetes` filtra los que no esten presentes.
     let packages = if is_solus_linux() {
         vec!["gamemode", "mangohud"]
     } else {
-        vec!["gamemode", "mangohud", "protonup-qt"]
+        vec!["gamemode", "mangohud", "protonplus", "protonup-qt"]
     };
     desinstalar_paquetes(reporter, &packages)
 }

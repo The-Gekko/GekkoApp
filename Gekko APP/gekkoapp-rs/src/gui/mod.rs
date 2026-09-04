@@ -200,24 +200,32 @@ fn installed_version_of(
 
     match component {
         CatalogComponent::BauhFork => {
-            let launcher = paths.bin_home.join("bauh");
-            if launcher.exists() || is_binary_in_path("bauh") {
+            // El fork publica sus ejecutables como `gekko-bauh*`; `bauh` es el
+            // nombre que usaban versiones anteriores y sigue reconociendose para
+            // no dar un falso negativo en instalaciones antiguas.
+            let mut nombres = vec![crate::core::catalog::BAUH_LAUNCHER];
+            nombres.extend_from_slice(crate::core::catalog::BAUH_LEGACY_LAUNCHERS);
+            for nombre in nombres {
+                let launcher = paths.bin_home.join(nombre);
+                // `bash -c` no siempre hereda ~/.local/bin en el PATH, asi que
+                // se invoca la ruta absoluta cuando el lanzador esta ahi.
                 let cmd = if launcher.exists() {
                     crate::core::system::sh_quote(&launcher)
+                } else if is_binary_in_path(nombre) {
+                    nombre.to_string()
                 } else {
-                    "bauh".to_string()
+                    continue;
                 };
                 let (_, version_output) =
-                    crate::core::system::run_shell_piped(&format!("{} --version 2>/dev/null", cmd));
-                let v = version_output.trim();
-                if let Some(ver) = v.strip_prefix("bauh ") {
-                    let ver = ver.trim();
-                    if !ver.is_empty() {
-                        return Some(ver.to_string());
-                    }
-                }
-                if !v.is_empty() {
-                    return Some(v.to_string());
+                    crate::core::system::run_shell_piped(&format!("{cmd} --version 2>/dev/null"));
+                let salida = version_output.trim();
+                let version = salida
+                    .strip_prefix("gekko-bauh ")
+                    .or_else(|| salida.strip_prefix("bauh "))
+                    .unwrap_or(salida)
+                    .trim();
+                if !version.is_empty() {
+                    return Some(version.to_string());
                 }
                 return Some("instalado".to_string());
             }
@@ -226,20 +234,36 @@ fn installed_version_of(
         CatalogComponent::GekkoAdb => {
             let launcher = paths.bin_home.join("gekko-adb");
             let app_dir = paths.data_home.join("gekko-adb/app");
-            if launcher.exists() || app_dir.exists() || is_binary_in_path("gekko-adb") {
-                if app_dir.join(".git").exists() {
-                    let (_, rev) = crate::core::system::run_shell_piped(&format!(
-                        "git -C {} rev-parse --short HEAD 2>/dev/null",
-                        crate::core::system::sh_quote(&app_dir)
-                    ));
-                    let rev = rev.trim();
-                    if !rev.is_empty() {
-                        return Some(rev.to_string());
-                    }
-                }
-                return Some("instalado".to_string());
+            if !launcher.exists() && !app_dir.exists() && !is_binary_in_path("gekko-adb") {
+                return None;
             }
-            None
+            // El instalador de Gekko ADB **copia** los archivos a `app_dir`, no
+            // clona: ahi nunca hay un `.git` que consultar. La unica revision
+            // disponible es la del checkout que mantiene GekkoApp en su cache,
+            // y solo sirve si su codigo coincide byte a byte con lo instalado:
+            // ese clon puede haber quedado de un intento fallido o de otra
+            // revision. Si no coincide se dice "instalado" sin inventar nada.
+            let checkout = paths
+                .cache_home
+                .join(crate::core::catalog::GEKKO_ADB_PRODUCT_ID);
+            let mismo_codigo = matches!(
+                (
+                    std::fs::read(app_dir.join("gekko_adb_core.py")),
+                    std::fs::read(checkout.join("gekko_adb_core.py")),
+                ),
+                (Ok(instalado), Ok(clonado)) if instalado == clonado
+            );
+            if mismo_codigo && checkout.join(".git").exists() {
+                let (_, rev) = crate::core::system::run_shell_piped(&format!(
+                    "git -C {} rev-parse --short HEAD 2>/dev/null",
+                    crate::core::system::sh_quote(&checkout)
+                ));
+                let rev = rev.trim();
+                if !rev.is_empty() {
+                    return Some(rev.to_string());
+                }
+            }
+            Some("instalado".to_string())
         }
 
         CatalogComponent::GekkoApp => Some(env!("CARGO_PKG_VERSION").to_string()),
@@ -339,14 +363,24 @@ async fn check_updates() -> Result<Vec<UpdateInfo>, String> {
                 continue;
             }
             let installed_version = installed_version_of(&installed, component);
-            let latest =
-                crate::core::github::resolve_latest_release(component.repository(), target)
-                    .ok()
-                    .map(|(tag, _, _)| tag.trim_start_matches('v').to_string());
+            let latest = crate::core::github::resolve_latest_release(
+                component.repository(),
+                component.id(),
+                target,
+            )
+            .ok()
+            .map(|(tag, _, _)| tag.trim_start_matches('v').to_string());
             let update_available = match (&installed_version, &latest) {
-                (Some(current), Some(newer)) => crate::installer::compare_versions(newer, current)
-                    .map(|ordering| ordering == std::cmp::Ordering::Greater)
-                    .unwrap_or(false),
+                (Some(current), Some(newer)) => {
+                    match crate::installer::compare_versions(newer, current) {
+                        Ok(ordering) => ordering == std::cmp::Ordering::Greater,
+                        // Alguna de las dos no es comparable numericamente (por
+                        // ejemplo el marcador "instalado" de una instalacion que
+                        // GekkoApp no registro). Se avisa si difieren, en vez de
+                        // afirmar en silencio que todo esta al dia.
+                        Err(_) => current != newer,
+                    }
+                }
                 _ => false,
             };
             updates.push(UpdateInfo {
@@ -439,10 +473,14 @@ async fn install_kito(
 ) -> Result<usize, String> {
     let environment = SystemEnvironment::detect();
     if !environment.compatibility.supported {
-        return Err(
-            "La instalacion de Kito requiere una sesion Wayland sobre Hyprland en Arch."
-                .to_string(),
-        );
+        return Err(format!(
+            "El entorno no es compatible: {}",
+            if environment.compatibility.reasons.is_empty() {
+                "revisa la deteccion del sistema.".to_string()
+            } else {
+                environment.compatibility.reasons.join("; ")
+            }
+        ));
     }
     let password = require_password(password)?;
     let reporter = GuiReporter { app };
@@ -544,14 +582,11 @@ async fn install_gaming_setup(
     gpu: String,
     password: Option<String>,
 ) -> Result<(), String> {
-    let vulkan_choice = match gpu.as_str() {
-        "nvidia" => "1",
-        "intel" => "7",
-        "amd" => "12",
-        _ => return Err(format!("GPU no soportada: {gpu}")),
-    };
+    if !matches!(gpu.as_str(), "nvidia" | "intel" | "amd") {
+        return Err(format!("GPU no soportada: {gpu}"));
+    }
     run_gui_install(app, password, move |reporter| {
-        if crate::core::flow::install_gaming(reporter, &gpu, vulkan_choice) {
+        if crate::core::flow::install_gaming(reporter, &gpu) {
             Ok(())
         } else {
             Err("La instalacion de Gaming fallo.".to_string())

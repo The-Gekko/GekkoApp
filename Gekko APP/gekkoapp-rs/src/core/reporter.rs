@@ -88,6 +88,8 @@ fn print_header(title: &str) {
 }
 
 fn fake_progress_bar(label: &str, steps: u32) {
+    // `steps` divide mas abajo: un 0 haria entrar en panico al reporter.
+    let steps = steps.max(1);
     let width: u32 = 40;
     hide_cursor();
     for i in 0..=steps {

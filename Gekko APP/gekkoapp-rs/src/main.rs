@@ -85,20 +85,24 @@ fn print_banner(env: &SystemEnvironment) {
     println!("  {}{}╭{}╮{}", FG_CYAN, BOLD, "─".repeat(63), RESET);
 
     let subtitle = "🐉  THE-GEKKO LINUX POST-INSTALL & CONFIG  🐉";
-    let pad = (63usize.saturating_sub(subtitle.chars().count())) / 2;
+    let width = 63usize;
+    let left = width.saturating_sub(subtitle.chars().count()) / 2;
+    let right = width
+        .saturating_sub(subtitle.chars().count())
+        .saturating_sub(left);
     println!(
-        "  {}{}│{}{}{}{}{}{:>pad$}{}│{}",
+        "  {}{}│{}{}{}{}{}{}{}{}│{}",
         FG_CYAN,
         BOLD,
         RESET,
-        " ".repeat(pad),
+        " ".repeat(left),
         FG_WHITE,
         BOLD,
         subtitle,
-        "",
-        FG_CYAN,
         RESET,
-        pad = 0
+        " ".repeat(right),
+        FG_CYAN,
+        RESET
     );
 
     let by_line = format!(
@@ -262,7 +266,10 @@ fn print_menu(env: &SystemEnvironment) {
     let _ = io::stdout().flush();
 }
 
-fn run_uninstall_menu(reporter: &dyn Reporter) {
+fn run_uninstall_menu(reporter: &dyn Reporter, env: &SystemEnvironment) {
+    // Los presets Hyprland y Niri solo existen en Arch: el submenu los oculta
+    // igual que hace `print_menu`, para no ofrecer una accion imposible.
+    let is_arch = env.distro_id == "arch" || env.distro_like.iter().any(|id| id == "arch");
     println!();
     println!(
         "  {}{}--- MENÚ DE DESINSTALACIÓN ---{}",
@@ -272,8 +279,10 @@ fn run_uninstall_menu(reporter: &dyn Reporter) {
     println!("  {}[2]{} Desinstalar Gekko ADB Studio", FG_CYAN, RESET);
     println!("  {}[3]{} Desinstalar Entorno Kito", FG_CYAN, RESET);
     println!("  {}[4]{} Desinstalar Terminal Bonita", FG_CYAN, RESET);
-    println!("  {}[5]{} Desinstalar Preset Hyprland", FG_CYAN, RESET);
-    println!("  {}[6]{} Desinstalar Preset Niri", FG_CYAN, RESET);
+    if is_arch {
+        println!("  {}[5]{} Desinstalar Preset Hyprland", FG_CYAN, RESET);
+        println!("  {}[6]{} Desinstalar Preset Niri", FG_CYAN, RESET);
+    }
     println!("  {}[7]{} Desinstalar Gaming Setup", FG_CYAN, RESET);
     println!("  {}[0]{} Cancelar", FG_RED, RESET);
     println!();
@@ -297,10 +306,10 @@ fn run_uninstall_menu(reporter: &dyn Reporter) {
         "4" => {
             uninstall_zsh_starship(reporter);
         }
-        "5" => {
+        "5" if is_arch => {
             uninstall_hyprland(reporter);
         }
-        "6" => {
+        "6" if is_arch => {
             uninstall_niri(reporter);
         }
         "7" => {
@@ -339,15 +348,15 @@ fn main() {
                 press_enter_to_continue(&reporter);
             }
             "4" => {
-                install_gaming(&reporter, "nvidia", "1");
+                install_gaming(&reporter, "nvidia");
                 press_enter_to_continue(&reporter);
             }
             "5" => {
-                install_gaming(&reporter, "intel", "7");
+                install_gaming(&reporter, "intel");
                 press_enter_to_continue(&reporter);
             }
             "6" => {
-                install_gaming(&reporter, "amd", "12");
+                install_gaming(&reporter, "amd");
                 press_enter_to_continue(&reporter);
             }
             "7" => {
@@ -376,7 +385,7 @@ fn main() {
                 press_enter_to_continue(&reporter);
             }
             "d" | "D" => {
-                run_uninstall_menu(&reporter);
+                run_uninstall_menu(&reporter, &environment);
                 press_enter_to_continue(&reporter);
             }
             "0" => {

@@ -25,7 +25,11 @@ pub struct Compatibility {
 impl SystemEnvironment {
     pub fn detect() -> Self {
         let os_release = fs::read_to_string("/etc/os-release").unwrap_or_default();
-        let variables = env::vars().collect::<HashMap<_, _>>();
+        // `env::vars()` entra en panico si alguna variable no es UTF-8 valido.
+        // Se descartan esas en vez de tumbar el arranque de la aplicacion.
+        let variables = env::vars_os()
+            .filter_map(|(key, value)| Some((key.into_string().ok()?, value.into_string().ok()?)))
+            .collect::<HashMap<_, _>>();
         Self::from_sources(&os_release, &variables, command_exists("systemctl"))
     }
 

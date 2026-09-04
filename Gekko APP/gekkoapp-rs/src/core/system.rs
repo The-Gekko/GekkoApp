@@ -44,17 +44,35 @@ pub fn is_package_installed(pkg: &str) -> bool {
     }
 }
 
-/// Prefijo de sudo para los comandos del gestor de paquetes.
+/// Prefijo de sudo para los comandos privilegiados.
 ///
-/// La GUI establece `GEKKOAPP_ASKPASS` (y `SUDO_ASKPASS`) apuntando a un
-/// helper askpass temporal; en ese caso sudo lee la contrasena sin TTY. En el
-/// CLI el prefijo se queda en `sudo` para conservar el prompt de la terminal.
-fn sudo_prefix() -> &'static str {
+/// La GUI establece `GEKKOAPP_ASKPASS` (y `SUDO_ASKPASS`) apuntando a un helper
+/// askpass temporal; en ese caso se usa `sudo -A`. En el CLI el prefijo se queda
+/// en `sudo` para conservar el prompt de la terminal.
+///
+/// El `-A` no es un capricho: sudo solo recurre a `SUDO_ASKPASS` por su cuenta
+/// cuando *no hay terminal*, y el Control Center lanzado desde una terminal
+/// (`./GekkoApp.sh`) hereda esa TTY. Sin `-A`, sudo pediria la contrasena en un
+/// terminal que el usuario de la GUI no esta mirando y la operacion pareceria
+/// colgada.
+pub fn sudo_prefix() -> &'static str {
     if std::env::var_os("GEKKOAPP_ASKPASS").is_some() {
         "sudo -A"
     } else {
         "sudo"
     }
+}
+
+/// Construye un `Command` de `sudo` con el modo askpass cuando corresponde.
+///
+/// Es el equivalente de [`sudo_prefix`] para las invocaciones que no pasan por
+/// una shell; misma regla y mismo motivo.
+pub fn sudo_command() -> Command {
+    let mut command = Command::new("sudo");
+    if std::env::var_os("GEKKOAPP_ASKPASS").is_some() {
+        command.arg("-A");
+    }
+    command
 }
 
 fn parse_os_release_kv(contents: &str) -> std::collections::HashMap<String, String> {
@@ -182,6 +200,54 @@ pub fn instalar_paquetes(reporter: &dyn Reporter, paquetes: &[&str]) -> bool {
     true
 }
 
+/// ¿Conoce el gestor de paquetes este nombre en los repositorios activos?
+///
+/// Se usa para los extras que solo existen en repositorios de terceros (por
+/// ejemplo Chaotic AUR): permite omitirlos con un aviso en vez de abortar toda
+/// la instalacion con un "target not found".
+///
+/// Espera nombres de paquete REALES. `pacman -Si` no resuelve `provides`, asi
+/// que un nombre virtual (p. ej. `dxvk`, que proveen `dxvk-mingw-git` y
+/// `dxvk-async-git`) se daria por ausente. Pasa siempre el proveedor concreto:
+/// ademas evita el prompt de seleccion de proveedor de pacman.
+pub fn is_package_available(pkg: &str) -> bool {
+    if check_arch_linux() {
+        run_shell_piped(&format!("pacman -Si '{pkg}' >/dev/null 2>&1")).0
+    } else if is_solus_linux() {
+        run_shell_piped(&format!("eopkg info '{pkg}' >/dev/null 2>&1")).0
+    } else {
+        false
+    }
+}
+
+/// Instala paquetes que pueden no estar en todos los repositorios soportados.
+///
+/// A diferencia de [`instalar_paquetes`], nunca aborta el flujo: descarta los
+/// que el gestor no conoce, avisa de cada omision e instala el resto. Devuelve
+/// `false` solo si fallo la instalacion de los que si estaban disponibles.
+pub fn instalar_paquetes_opcionales(reporter: &dyn Reporter, paquetes: &[&str]) -> bool {
+    if !has_supported_package_manager() {
+        reporter.warn("Sin gestor de paquetes soportado: se omiten los extras opcionales.");
+        return true;
+    }
+
+    let mut disponibles = Vec::new();
+    for pkg in paquetes {
+        if is_package_installed(pkg) || is_package_available(pkg) {
+            disponibles.push(*pkg);
+        } else {
+            reporter.warn(&format!(
+                "'{pkg}' no esta en tus repositorios; se omite (puedes instalarlo aparte)."
+            ));
+        }
+    }
+
+    if disponibles.is_empty() {
+        return true;
+    }
+    instalar_paquetes(reporter, &disponibles)
+}
+
 pub fn desinstalar_paquetes(reporter: &dyn Reporter, paquetes: &[&str]) -> bool {
     if !has_supported_package_manager() {
         return false;
@@ -199,11 +265,51 @@ pub fn desinstalar_paquetes(reporter: &dyn Reporter, paquetes: &[&str]) -> bool 
     }
 
     reporter.info(&format!(
-        "🗑️  Se van a desinstalar {} paquetes innecesarios:",
+        "🗑️  Se van a desinstalar {} paquetes:",
         a_eliminar.len()
     ));
     for pkg in &a_eliminar {
         reporter.step(&format!("✗ {}", pkg));
+    }
+
+    let pkg_list = a_eliminar.join(" ");
+
+    // `pacman -Rns` arrastra ademas las dependencias que dejan de ser
+    // necesarias. El plan tiene que mostrar el conjunto REAL antes de pedir
+    // confirmacion: antes se confirmaba una lista corta y se borraba otra mas
+    // larga. `--print` no necesita privilegios y no toca el sistema.
+    // Solo en Arch: `eopkg remove` no arrastra dependencias por su cuenta, asi
+    // que en Solus la lista mostrada ya es el conjunto real.
+    if check_arch_linux() {
+        // `-Rns --print` no es valido (`--nosave` choca con `--print`); `-Rs`
+        // calcula exactamente el mismo conjunto, porque `-n` solo afecta a si
+        // se conservan los ficheros de configuracion.
+        let (ok, salida) = run_shell_piped(&format!(
+            "pacman -Rs --print --print-format '%n' {pkg_list} 2>&1"
+        ));
+        if ok {
+            let arrastradas = salida
+                .split_whitespace()
+                .filter(|nombre| !a_eliminar.contains(nombre))
+                .collect::<Vec<_>>();
+            if !arrastradas.is_empty() {
+                reporter.warn(&format!(
+                    "Se retiraran tambien {} dependencias que dejan de ser necesarias:",
+                    arrastradas.len()
+                ));
+                for pkg in &arrastradas {
+                    reporter.step(&format!("✗ {} (dependencia)", pkg));
+                }
+            }
+        } else {
+            // Un fallo aqui suele significar que otro paquete instalado depende
+            // de alguno de estos: se muestra tal cual, porque la desinstalacion
+            // real fallara igual.
+            reporter.warn("pacman no puede completar esta desinstalacion tal cual:");
+            for linea in salida.lines().filter(|l| !l.trim().is_empty()).take(6) {
+                reporter.step(linea.trim());
+            }
+        }
     }
 
     if !reporter.confirm("¿Deseas proceder con la desinstalación de estos paquetes?") {
@@ -211,7 +317,6 @@ pub fn desinstalar_paquetes(reporter: &dyn Reporter, paquetes: &[&str]) -> bool 
         return false;
     }
 
-    let pkg_list = a_eliminar.join(" ");
     let cmd = if check_arch_linux() {
         format!("{} pacman -Rns --noconfirm {}", sudo_prefix(), pkg_list)
     } else {
@@ -237,17 +342,49 @@ pub fn configurar_fastfetch(reporter: &dyn Reporter) -> bool {
         return false;
     }
 
-    let config = format!(
-        r#"{{
-  "$schema": "https://github.com/fastfetch-cli/fastfetch/raw/dev/doc/logo.png",
-  "logo": {{
+    // La confirmacion va ANTES de tocar nada: `resolve_fastfetch_logo` puede
+    // copiar la imagen dentro de ~/.config/fastfetch, y no debe hacerlo si el
+    // usuario acaba diciendo que no.
+    let config_path = format!("{}/config.jsonc", config_dir);
+    if Path::new(&config_path).exists() {
+        reporter.info(&format!("Se sobrescribirá el archivo {}", config_path));
+        if !reporter.confirm("¿Deseas sobrescribir config.jsonc de fastfetch?") {
+            reporter.info("Se conserva tu config.jsonc de fastfetch.");
+            return true;
+        }
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_secs())
+            .unwrap_or_default();
+        if let Err(e) = std::fs::copy(
+            &config_path,
+            format!("{}.backup_{}", config_path, timestamp),
+        ) {
+            reporter.err(&format!("Fallo al respaldar config.jsonc: {}", e));
+            return false;
+        }
+    }
+
+    // El logo solo se declara si la imagen existe de verdad: un `source`
+    // inexistente hace que fastfetch imprima un error en cada shell interactiva.
+    let logo_block = match resolve_fastfetch_logo(reporter, &config_dir) {
+        Some(image) => format!(
+            r#"  "logo": {{
     "type": "kitty-direct",
-    "source": "{home}/.config/fastfetch/Anime Render.png",
+    "source": "{image}",
     "height": 20,
     "width": 30,
     "padding": {{ "top": 4, "left": 0, "right": 0 }}
   }},
-  "display": {{
+"#
+        ),
+        None => String::new(),
+    };
+
+    let config = format!(
+        r#"{{
+  "$schema": "https://github.com/fastfetch-cli/fastfetch/raw/dev/doc/json_schema.json",
+{logo_block}  "display": {{
     "separator": " ► ",
     "bar": {{
       "char": {{ "elapsed": "", "total": "" }},
@@ -285,27 +422,8 @@ pub fn configurar_fastfetch(reporter: &dyn Reporter) -> bool {
   ]
 }}
 "#,
-        home = home
+        logo_block = logo_block
     );
-
-    let config_path = format!("{}/config.jsonc", config_dir);
-    if Path::new(&config_path).exists() {
-        reporter.info(&format!("Se sobrescribirá el archivo {}", config_path));
-        if !reporter.confirm("¿Deseas sobrescribir config.jsonc de fastfetch?") {
-            return false;
-        }
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-        if let Err(e) = std::fs::copy(
-            &config_path,
-            format!("{}.backup_{}", config_path, timestamp),
-        ) {
-            reporter.err(&format!("Fallo al respaldar config.jsonc: {}", e));
-            return false;
-        }
-    }
 
     if let Err(e) = std::fs::write(&config_path, config) {
         reporter.err(&format!("Fallo al escribir config.jsonc: {}", e));
@@ -313,22 +431,37 @@ pub fn configurar_fastfetch(reporter: &dyn Reporter) -> bool {
     }
     reporter.ok("Configuración .jsonc de Fastfetch generada.");
 
-    let img_dest = format!("{}/Anime Render.png", config_dir);
-    if !Path::new(&img_dest).exists() {
-        if Path::new("./Anime Render.png").exists() {
-            if let Err(e) = std::fs::copy("./Anime Render.png", &img_dest) {
-                reporter.warn(&format!("No se pudo copiar la imagen: {}", e));
-            } else {
+    true
+}
+
+/// Resuelve la imagen del logo de fastfetch, o `None` para usar el logo de la
+/// distribucion.
+///
+/// Busca `Anime Render.png` ya instalada en `~/.config/fastfetch/`; si no esta,
+/// la copia desde el directorio de trabajo cuando el usuario la dejo ahi. Si no
+/// aparece por ningun lado se omite el bloque `logo` del config, en vez de
+/// apuntar a un archivo inexistente.
+fn resolve_fastfetch_logo(reporter: &dyn Reporter, config_dir: &str) -> Option<String> {
+    const LOGO_NAME: &str = "Anime Render.png";
+    let destination = format!("{config_dir}/{LOGO_NAME}");
+    if Path::new(&destination).exists() {
+        return Some(destination);
+    }
+    let source = format!("./{LOGO_NAME}");
+    if Path::new(&source).exists() {
+        match std::fs::copy(&source, &destination) {
+            Ok(_) => {
                 reporter.ok("Imagen 'Anime Render.png' copiada a ~/.config/fastfetch/");
+                return Some(destination);
             }
-        } else {
-            reporter.warn(
-                "Copia tu imagen 'Anime Render.png' en ~/.config/fastfetch/ para el logo kitty.",
-            );
+            Err(e) => reporter.warn(&format!("No se pudo copiar la imagen: {}", e)),
         }
     }
-
-    true
+    reporter.info(&format!(
+        "Sin '{LOGO_NAME}' en {config_dir}: fastfetch usara el logo de tu distribucion. \
+         Copia ahi tu imagen y vuelve a ejecutar el preset para usarla."
+    ));
+    None
 }
 
 /// Prints the detected environment summary through the reporter.

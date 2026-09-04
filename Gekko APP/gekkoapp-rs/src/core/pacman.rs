@@ -1,5 +1,7 @@
 use crate::core::reporter::Reporter;
-use crate::core::system::{check_arch_linux, run_shell, run_shell_piped};
+use crate::core::system::{
+    check_arch_linux, run_shell, run_shell_piped, sudo_command, sudo_prefix,
+};
 
 fn check_chaotic_aur_configured(pacman_conf: &str) -> bool {
     let mut in_chaotic = false;
@@ -53,9 +55,7 @@ struct LockGuard<'a> {
 
 impl<'a> Drop for LockGuard<'a> {
     fn drop(&mut self) {
-        let st = std::process::Command::new("sudo")
-            .args(["rmdir", self.path])
-            .status();
+        let st = sudo_command().args(["rmdir", self.path]).status();
         if let Ok(status) = st {
             if !status.success() {
                 eprintln!("Atención: No se pudo liberar el candado en {}", self.path);
@@ -73,10 +73,7 @@ struct BackupGuard {
 }
 
 fn default_remover(path: &str) -> Result<(), ()> {
-    match std::process::Command::new("sudo")
-        .args(["rm", "-f", path])
-        .status()
-    {
+    match sudo_command().args(["rm", "-f", path]).status() {
         Ok(status) if status.success() => Ok(()),
         _ => Err(()),
     }
@@ -139,7 +136,7 @@ impl Drop for BackupGuard {
 }
 
 fn replace_pacman_conf_securely(current_conf: &str, new_conf: &str) -> ReplaceResult {
-    let mktemp_cmd = std::process::Command::new("sudo")
+    let mktemp_cmd = sudo_command()
         .arg("mktemp")
         .arg("/etc/pacman.conf.tmp.XXXXXX")
         .output();
@@ -150,14 +147,10 @@ fn replace_pacman_conf_securely(current_conf: &str, new_conf: &str) -> ReplaceRe
     };
 
     let cleanup = |file: &str| {
-        let _ = std::process::Command::new("sudo")
-            .arg("rm")
-            .arg("-f")
-            .arg(file)
-            .status();
+        let _ = sudo_command().arg("rm").arg("-f").arg(file).status();
     };
 
-    let mut tee = match std::process::Command::new("sudo")
+    let mut tee = match sudo_command()
         .arg("tee")
         .arg(&tmp_file)
         .stdin(std::process::Stdio::piped())
@@ -187,17 +180,14 @@ fn replace_pacman_conf_securely(current_conf: &str, new_conf: &str) -> ReplaceRe
         }
     }
 
-    match std::process::Command::new("sudo")
-        .args(["chmod", "644", &tmp_file])
-        .status()
-    {
+    match sudo_command().args(["chmod", "644", &tmp_file]).status() {
         Ok(status) if status.success() => {}
         _ => {
             cleanup(&tmp_file);
             return ReplaceResult::NotReplaced;
         }
     }
-    match std::process::Command::new("sudo")
+    match sudo_command()
         .args(["chown", "root:root", &tmp_file])
         .status()
     {
@@ -225,7 +215,7 @@ fn replace_pacman_conf_securely(current_conf: &str, new_conf: &str) -> ReplaceRe
         return ReplaceResult::ConcurrentModification;
     }
 
-    let mv_status = std::process::Command::new("sudo")
+    let mv_status = sudo_command()
         .args(["mv", &tmp_file, "/etc/pacman.conf"])
         .status();
 
@@ -255,8 +245,15 @@ pub fn install_chaotic_aur(reporter: &dyn Reporter) -> bool {
     }
 
     let lock_path = "/run/lock/gekkoapp_pacman_conf_lock";
-    if !run_shell(&format!("sudo mkdir {}", lock_path)) {
-        reporter.err("No se pudo obtener el bloqueo de transacción. ¿Otra instancia en ejecución?");
+    if !run_shell(&format!("{} mkdir {}", sudo_prefix(), lock_path)) {
+        // El candado es un directorio: si el proceso anterior murio por Ctrl+C
+        // o por un corte, queda ahi y bloquea el flujo para siempre. Se
+        // distingue un candado vivo de uno huerfano y se explica como salir.
+        reporter.err("No se pudo obtener el bloqueo de transacción.");
+        reporter.info(&format!(
+            "Si no hay otra instancia de GekkoApp configurando repositorios, el candado quedo \
+             huerfano de una ejecucion interrumpida. Retiralo con: sudo rmdir {lock_path}"
+        ));
         return false;
     }
     let _lock = LockGuard { path: lock_path };
@@ -281,19 +278,28 @@ pub fn install_chaotic_aur(reporter: &dyn Reporter) -> bool {
 
     if !keyring_installed || !mirrorlist_installed {
         reporter.info("Obteniendo y verificando llaves públicas...");
-        let key_success = run_shell("sudo pacman-key --recv-key 3056513887B78AEB --keyserver hkps://keys.openpgp.org || sudo pacman-key --recv-key 3056513887B78AEB --keyserver keyserver.ubuntu.com");
+        let key_success = run_shell(&format!(
+            "{sudo} pacman-key --recv-key 3056513887B78AEB --keyserver hkps://keys.openpgp.org || {sudo} pacman-key --recv-key 3056513887B78AEB --keyserver keyserver.ubuntu.com",
+            sudo = sudo_prefix()
+        ));
         if !key_success {
             reporter.err("Error crítico: No se pudo obtener la llave GPG de Chaotic AUR.");
             return false;
         }
 
-        if !run_shell("sudo pacman-key --lsign-key 3056513887B78AEB") {
+        if !run_shell(&format!(
+            "{} pacman-key --lsign-key 3056513887B78AEB",
+            sudo_prefix()
+        )) {
             reporter.err("Error al firmar la llave GPG.");
             return false;
         }
 
         reporter.info("Instalando keyring y mirrorlist de Chaotic AUR...");
-        if !run_shell("sudo pacman -U --noconfirm 'https://cdn-mirror.chaotic.cx/chaotic-aur/chaotic-keyring.pkg.tar.zst' 'https://cdn-mirror.chaotic.cx/chaotic-aur/chaotic-mirrorlist.pkg.tar.zst'") {
+        if !run_shell(&format!(
+            "{} pacman -U --noconfirm 'https://cdn-mirror.chaotic.cx/chaotic-aur/chaotic-keyring.pkg.tar.zst' 'https://cdn-mirror.chaotic.cx/chaotic-aur/chaotic-mirrorlist.pkg.tar.zst'",
+            sudo_prefix()
+        )) {
             reporter.err("Error instalando paquetes de Chaotic AUR.");
             return false;
         }
@@ -309,7 +315,10 @@ pub fn install_chaotic_aur(reporter: &dyn Reporter) -> bool {
 
     if !check_chaotic_aur_configured(&current_conf) {
         reporter.info("Editando /etc/pacman.conf de manera segura...");
-        let (ok, out) = run_shell_piped("sudo mktemp /etc/pacman.conf.backup.XXXXXX");
+        let (ok, out) = run_shell_piped(&format!(
+            "{} mktemp /etc/pacman.conf.backup.XXXXXX",
+            sudo_prefix()
+        ));
         let backup_file = if ok {
             out.trim().to_string()
         } else {
@@ -318,7 +327,7 @@ pub fn install_chaotic_aur(reporter: &dyn Reporter) -> bool {
         };
         let mut backup_guard = BackupGuard::new(backup_file.clone());
 
-        let mut tee = match std::process::Command::new("sudo")
+        let mut tee = match sudo_command()
             .arg("tee")
             .arg(&backup_file)
             .stdin(std::process::Stdio::piped())
@@ -326,11 +335,15 @@ pub fn install_chaotic_aur(reporter: &dyn Reporter) -> bool {
             .spawn()
         {
             Ok(child) => child,
-            Err(_) => return false,
+            Err(_) => {
+                reporter.err("No se pudo iniciar el respaldo de pacman.conf.");
+                return false;
+            }
         };
         if let Some(mut stdin) = tee.stdin.take() {
             if std::io::Write::write_all(&mut stdin, current_conf.as_bytes()).is_err() {
                 let _ = tee.wait();
+                reporter.err("No se pudo escribir el respaldo de pacman.conf.");
                 return false;
             }
         }
@@ -368,12 +381,12 @@ pub fn install_chaotic_aur(reporter: &dyn Reporter) -> bool {
             }
             ReplaceResult::Replaced => {
                 reporter.info("Sincronizando repositorios y actualizando el sistema...");
-                if !run_shell("sudo pacman -Syu") {
+                if !run_shell(&format!("{} pacman -Syu", sudo_prefix())) {
                     reporter.err("Error sincronizando repositorios. Restaurando backup...");
                     match std::fs::read_to_string("/etc/pacman.conf") {
                         Ok(active) => {
                             if active == new_conf {
-                                let backup_ok = match std::process::Command::new("sudo")
+                                let backup_ok = match sudo_command()
                                     .args(["cat", "--", &backup_guard.path])
                                     .output()
                                 {
@@ -387,19 +400,24 @@ pub fn install_chaotic_aur(reporter: &dyn Reporter) -> bool {
                                     backup_guard.keep("El backup no coincide con la configuración original o no se pudo leer.");
                                 } else {
                                     let mut perms_ok = true;
-                                    if !run_shell(&format!("sudo chmod 644 {}", backup_guard.path))
-                                    {
+                                    if !run_shell(&format!(
+                                        "{} chmod 644 {}",
+                                        sudo_prefix(),
+                                        backup_guard.path
+                                    )) {
                                         perms_ok = false;
                                     }
                                     if !run_shell(&format!(
-                                        "sudo chown root:root {}",
+                                        "{} chown root:root {}",
+                                        sudo_prefix(),
                                         backup_guard.path
                                     )) {
                                         perms_ok = false;
                                     }
                                     if perms_ok {
                                         let restore_cmd = format!(
-                                            "sudo mv {} /etc/pacman.conf",
+                                            "{} mv {} /etc/pacman.conf",
+                                            sudo_prefix(),
                                             backup_guard.path
                                         );
                                         if !run_shell(&restore_cmd) {
@@ -417,7 +435,16 @@ pub fn install_chaotic_aur(reporter: &dyn Reporter) -> bool {
                                     }
                                 }
                             } else {
-                                reporter.warn("pacman.conf modificado tras nuestra escritura. Backup descartado.");
+                                // Otro proceso escribio /etc/pacman.conf despues
+                                // que nosotros: no se restaura nada, pero el
+                                // backup es la unica copia del original y se
+                                // conserva en vez de borrarse.
+                                reporter.warn(
+                                    "pacman.conf fue modificado por otro proceso tras nuestra escritura.",
+                                );
+                                backup_guard.keep(
+                                    "pacman.conf cambio por fuera; el backup del original se conserva.",
+                                );
                             }
                         }
                         Err(e) => {
@@ -440,7 +467,7 @@ pub fn install_chaotic_aur(reporter: &dyn Reporter) -> bool {
         }
     } else {
         reporter.info("Sincronizando repositorios y actualizando el sistema...");
-        if !run_shell("sudo pacman -Syu") {
+        if !run_shell(&format!("{} pacman -Syu", sudo_prefix())) {
             reporter.err("Error sincronizando repositorios (pacman -Syu falló).");
             return false;
         }
