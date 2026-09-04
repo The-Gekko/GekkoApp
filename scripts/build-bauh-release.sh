@@ -71,10 +71,19 @@ for file in setup.py setup.cfg pyproject.toml requirements.txt MANIFEST.in READM
 done
 
 # Plantilla .desktop: tokeniza Exec y apunta Icono al application id.
-DESKTOP_SRC="$BAUH_SRC/bauh/desktop/bauh.desktop"
+# El fork renombro su lanzador a gekko-bauh.desktop para no tapar por
+# precedencia XDG al paquete oficial; se acepta el nombre antiguo por si se
+# empaqueta un checkout viejo.
+DESKTOP_SRC=""
+for candidate in "$BAUH_SRC/bauh/desktop/gekko-bauh.desktop" "$BAUH_SRC/bauh/desktop/bauh.desktop"; do
+  if [ -f "$candidate" ]; then
+    DESKTOP_SRC="$candidate"
+    break
+  fi
+done
 DESKTOP_TEMPLATE="$STAGE/$ROOT/bauh/desktop/bauh.desktop.template"
-if [ ! -f "$DESKTOP_SRC" ]; then
-  echo "error: falta $DESKTOP_SRC" >&2
+if [ -z "$DESKTOP_SRC" ]; then
+  echo "error: no se encontro bauh/desktop/gekko-bauh.desktop en $BAUH_SRC" >&2
   exit 1
 fi
 sed -e 's|^Exec=.*|Exec=@EXECUTABLE@|' \
@@ -85,16 +94,21 @@ if grep -q '@' "$DESKTOP_TEMPLATE" && [ "$(grep -o '@' "$DESKTOP_TEMPLATE" | wc 
   exit 1
 fi
 
-# Icono PNG hicolor a partir del logo SVG.
+# Icono PNG hicolor. El fork ya publica los PNG por tamano en pictures/icons,
+# asi que se copia el de 512 en vez de rasterizar un SVG (bauh ya no distribuye
+# view/resources/img/logo.svg).
 ICON_SOURCE="$STAGE/$ROOT/bauh/desktop/$APP_ID.png"
-if command -v rsvg-convert >/dev/null 2>&1; then
+# Se exige el PNG del tamano exacto que se va a declarar en el manifiesto. No
+# vale un fallback de otro tamano: el manifiesto dice "size": 512 y el motor lo
+# instala en hicolor/512x512, asi que publicar ahi un PNG de 256 daria un icono
+# borroso o mal escalado en el menu.
+ICON_ORIGIN="$BAUH_SRC/pictures/icons/gekko-bauh-$ICON_SIZE.png"
+if [ -f "$ICON_ORIGIN" ]; then
+  install -m 0644 "$ICON_ORIGIN" "$ICON_SOURCE"
+elif [ -f "$BAUH_SRC/bauh/view/resources/img/logo.svg" ] && command -v rsvg-convert >/dev/null 2>&1; then
   rsvg-convert -w "$ICON_SIZE" -h "$ICON_SIZE" -o "$ICON_SOURCE" "$BAUH_SRC/bauh/view/resources/img/logo.svg"
-elif command -v magick >/dev/null 2>&1; then
-  magick -background none -density 96 "$BAUH_SRC/bauh/view/resources/img/logo.svg" -resize "${ICON_SIZE}x${ICON_SIZE}" "$ICON_SOURCE"
-elif command -v convert >/dev/null 2>&1; then
-  convert -background none -density 96 "$BAUH_SRC/bauh/view/resources/img/logo.svg" -resize "${ICON_SIZE}x${ICON_SIZE}" "$ICON_SOURCE"
 else
-  echo "error: falta rsvg-convert, magick o convert para generar el icono PNG" >&2
+  echo "error: falta el icono de $ICON_SIZE px: $ICON_ORIGIN" >&2
   exit 1
 fi
 
@@ -116,6 +130,54 @@ archive_size, archive_sha256 = int(sys.argv[12]), sys.argv[13]
 manifest_name = sys.argv[14]
 
 tree = os.path.join(stage, root)
+
+
+def parse_pyproject(path):
+    """Devuelve (nombre de distribucion, {script: destino}) de un pyproject.toml.
+
+    Se lee a mano para no depender de tomllib (Python >= 3.11) en el host que
+    empaqueta. pipx registra el entorno con el nombre de la distribucion y crea
+    un ejecutable por cada entrada de [project.scripts]: el manifiesto tiene que
+    declarar exactamente esos, o la activacion fallara al no encontrarlos.
+    """
+    name, scripts, section = None, {}, None
+    with open(path, encoding="utf-8") as fh:
+        for raw in fh:
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("[") and line.endswith("]"):
+                section = line[1:-1]
+                continue
+            if "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip().strip('"').strip("'")
+            value = value.split("#")[0].strip().strip('"').strip("'")
+            if section == "project" and key == "name" and name is None:
+                # Solo el primer `name` de [project]. Una tabla inline
+                # multilinea (authors = [\n  { name = "..." },\n]) podria
+                # aportar otro `name` y suplantar al de la distribucion.
+                name = value
+            elif section == "project.scripts" and value:
+                scripts[key] = value
+    return name, scripts
+
+
+distribution, scripts = parse_pyproject(os.path.join(tree, "pyproject.toml"))
+if not distribution:
+    sys.exit("error: pyproject.toml no declara [project] name")
+if not scripts:
+    sys.exit("error: pyproject.toml no declara [project.scripts]")
+
+entrypoints = []
+for script in sorted(scripts):
+    module = scripts[script].split(":")[0]
+    entrypoints.append({"name": script, "path": module.replace(".", "/") + ".py"})
+
+# El lanzador principal es el que se llama como la distribucion.
+primary = distribution if distribution in scripts else sorted(scripts)[0]
+
 payload = []
 for dirpath, dirnames, filenames in os.walk(tree):
     for name in sorted(filenames):
@@ -168,18 +230,15 @@ manifest = {
         "sha256": archive_sha256,
     },
     "payload": payload,
-    "entrypoints": [
-        {"name": "bauh", "path": "bauh/app.py"},
-        {"name": "bauh-tray", "path": "bauh/app.py"},
-        {"name": "bauh-cli", "path": "bauh/cli/app.py"},
-    ],
+    "entrypoints": entrypoints,
+    "pipx_distribution": distribution,
     "requirements": {"modules": [], "host_capabilities": []},
     "integrations": {
         "desktop_entries": [
             {
                 "application_id": app_id,
                 "template": "bauh/desktop/bauh.desktop.template",
-                "entrypoint": "bauh",
+                "entrypoint": primary,
                 "icons": [
                     {
                         "source": "bauh/desktop/%s.png" % app_id,
@@ -193,10 +252,17 @@ manifest = {
     },
 }
 
+declared = {entry["path"] for entry in payload}
+missing = [e["path"] for e in entrypoints if e["path"] not in declared]
+if missing:
+    sys.exit("error: entrypoints fuera del payload: %s" % ", ".join(missing))
+
 with open(os.path.join(dist_dir, manifest_name), "w", encoding="utf-8") as fh:
     json.dump(manifest, fh, indent=2, ensure_ascii=False)
     fh.write("\n")
 print("payload_files=%d" % len(payload))
+print("pipx_distribution=%s" % distribution)
+print("entrypoints=%s" % ", ".join(e["name"] for e in entrypoints))
 PYEOF
 )"
 

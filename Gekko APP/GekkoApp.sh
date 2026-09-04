@@ -23,6 +23,14 @@ fi
 CLI_BIN="$RUST_APP_DIR/target/release/gekkoapp"
 GUI_BIN="$RUST_APP_DIR/target/release/gekkoapp-gui"
 
+# Dentro de un release desempaquetado los binarios estan en ./bin, no en el
+# target de cargo. Con esto el mismo lanzador sirve en el repo y en el tarball;
+# antes, la copia que viaja en el release nunca encontraba nada.
+if [ -x "$SCRIPT_DIR/bin/gekkoapp-gui" ]; then
+    CLI_BIN="$SCRIPT_DIR/bin/gekkoapp"
+    GUI_BIN="$SCRIPT_DIR/bin/gekkoapp-gui"
+fi
+
 if [ "${1:-}" = "--cli" ]; then
     shift
     if [ -x "$CLI_BIN" ]; then
