@@ -18,11 +18,35 @@ fn clear_screen() {
     let _ = io::stdout().flush();
 }
 
-fn read_line() -> String {
+/// Lee una linea del menu. Devuelve `None` cuando la entrada se ha cerrado
+/// (EOF: `gekkoapp </dev/null`, una tuberia agotada, Ctrl+D): antes se
+/// trataba como una opcion vacia y el menu se redibujaba en un bucle infinito.
+fn read_line() -> Option<String> {
     let stdin = io::stdin();
     let mut line = String::new();
-    stdin.lock().read_line(&mut line).ok();
-    line.trim().to_string()
+    match stdin.lock().read_line(&mut line) {
+        Ok(0) | Err(_) => None,
+        Ok(_) => Some(line.trim().to_string()),
+    }
+}
+
+fn print_usage() {
+    println!(
+        "GekkoApp {} - menu de post-instalacion (CLI)",
+        env!("CARGO_PKG_VERSION")
+    );
+    println!();
+    println!("Uso: gekkoapp [--help | --version]");
+    println!();
+    println!("Sin argumentos abre el menu interactivo (instalar, actualizar y");
+    println!("desinstalar Kito, Bauh Fork, Gekko ADB Studio, Terminal Bonita,");
+    println!("Hyprland, Niri, Gaming y Chaotic AUR). Con la entrada cerrada (EOF)");
+    println!("el menu termina en vez de repetirse.");
+    println!();
+    println!("  -h, --help      Muestra esta ayuda y sale.");
+    println!("  -V, --version   Muestra la version y sale.");
+    println!();
+    println!("El Control Center grafico es el binario gekkoapp-gui.");
 }
 
 fn press_enter_to_continue(reporter: &dyn Reporter) {
@@ -292,7 +316,8 @@ fn run_uninstall_menu(reporter: &dyn Reporter, env: &SystemEnvironment) {
     );
     let _ = io::stdout().flush();
 
-    let choice = read_line();
+    // Con la entrada cerrada se cancela: el bucle principal terminara despues.
+    let choice = read_line().unwrap_or_default();
     match choice.as_str() {
         "1" => {
             let _ = uninstall_bauh(reporter);
@@ -322,13 +347,39 @@ fn run_uninstall_menu(reporter: &dyn Reporter, env: &SystemEnvironment) {
 }
 
 fn main() {
+    // Opciones no interactivas: permiten comprobar la instalacion desde
+    // scripts (`gekkoapp --version`) sin entrar en el menu.
+    let mut args = std::env::args().skip(1);
+    if let Some(argument) = args.next() {
+        match argument.as_str() {
+            "-h" | "--help" => {
+                print_usage();
+                return;
+            }
+            "-V" | "--version" => {
+                println!("gekkoapp {}", env!("CARGO_PKG_VERSION"));
+                return;
+            }
+            other => {
+                eprintln!("gekkoapp: opcion desconocida: {other}");
+                eprintln!("Usa 'gekkoapp --help' para ver las opciones.");
+                std::process::exit(2);
+            }
+        }
+    }
+
     let reporter = CliReporter;
     let environment = SystemEnvironment::detect();
     loop {
         print_banner(&environment);
         print_menu(&environment);
 
-        let option = read_line();
+        let Some(option) = read_line() else {
+            println!();
+            reporter.info("Entrada cerrada (EOF): saliendo de GekkoApp.");
+            println!();
+            break;
+        };
 
         match option.as_str() {
             "k" | "K" => {

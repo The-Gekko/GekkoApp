@@ -10,7 +10,7 @@ use crate::kito::{ModuleSelection, ReleaseState};
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Duration;
 
@@ -476,7 +476,7 @@ fn install_gaming_solus(reporter: &dyn Reporter) -> bool {
 
 /// Instala o actualiza Bauh Fork (The-Gekko) desde GitHub Releases.
 ///
-/// El release se publica con un manifiesto firmado (SHA-256) que declara el
+/// El release se publica con un manifiesto verificado (SHA-256) que declara el
 /// metodo `python_pipx`: se verifica el artefacto fuente y se instala con
 /// pipx (desinstalando antes una instalacion pipx previa que bloquearia la
 /// activacion). La GUI pasa `require_confirmation = false` porque
@@ -525,7 +525,7 @@ pub fn install_bauh(
     ));
 
     let paths = InstallPaths::detect()?;
-    reporter.step("Descargando y verificando el artefacto firmado...");
+    reporter.step("Descargando y verificando el artefacto (manifiesto + SHA-256)...");
     plan.prefetch(&paths)?;
     reporter.step("Instalando Bauh Fork con pipx...");
     let state = plan.install(&paths)?;
@@ -552,7 +552,7 @@ pub fn install_bauh(
 /// Instala o actualiza GekkoApp a si misma desde GitHub Releases.
 ///
 /// Usa el mismo motor que el Bauh Fork: se resuelve el release mas reciente,
-/// se verifica el manifiesto firmado (SHA-256, contrato `kitotsu.release-artifact`
+/// se verifica el manifiesto (SHA-256, contrato `kitotsu.release-artifact`
 /// 1.0) y se activa con el layout nativo de symlinks. Como GekkoApp se instalo
 /// antes con `scripts/install.sh` (archivos regulares sin registrar), se
 /// adoptan esas rutas legacy antes de activar para que el motor pueda
@@ -582,7 +582,7 @@ pub fn install_gekkoapp(
     ));
 
     let paths = InstallPaths::detect()?;
-    reporter.step("Descargando y verificando el artefacto firmado...");
+    reporter.step("Descargando y verificando el artefacto (manifiesto + SHA-256)...");
     plan.prefetch(&paths)?;
     reporter.step("Adoptando los binarios e integracion previos...");
     crate::installer::adopt_release_destinations(&paths, &plan)?;
@@ -605,12 +605,16 @@ pub fn install_gekkoapp(
     thread::sleep(Duration::from_secs(2));
     Ok(())
 }
+
+/// Instala o actualiza Gekko ADB Studio (The-Gekko) desde su repositorio.
 ///
-/// El proyecto no publica releases firmados todavia, asi que se clona HEAD,
-/// se instalan las dependencias de sistema con pacman y se ejecuta su propio
-/// `install.sh --no-deps` (mismo instalador que usa el autor: copia la app a
-/// XDG, crea el launcher, el desktop entry, el icono y el metainfo). La
-/// revision instalada se registra en el estado de GekkoApp.
+/// El proyecto no publica releases todavia, asi que se clona HEAD de
+/// `main` por HTTPS (sin manifiesto ni SHA-256), se instalan las dependencias
+/// de sistema con pacman/eopkg y se ejecuta su propio `install.sh --no-deps
+/// --assume-yes` (mismo instalador que usa el autor: copia la app a XDG, crea
+/// el launcher, el desktop entry, el icono y el metainfo). En Arch se recargan
+/// ademas las reglas udev de `android-udev`, cosa que el instalador no hace
+/// con `--no-deps`. La revision instalada se registra en el estado de GekkoApp.
 pub fn install_gekko_adb(reporter: &dyn Reporter) -> Result<(), String> {
     reporter.header("INSTALANDO GEKKO ADB STUDIO (THE-GEKKO)");
 
@@ -619,6 +623,12 @@ pub fn install_gekko_adb(reporter: &dyn Reporter) -> Result<(), String> {
         return Err("Gekko ADB Studio solo esta disponible en Arch Linux y Solus.".to_owned());
     }
 
+    // Misma lista que REQUIRED_PACKAGES en el install.sh de Gekko ADB (mas
+    // `git` para el clon). Como se ejecuta con `--no-deps`, lo que falte aqui
+    // no lo instala nadie: `android-udev` aporta las reglas 51-android.rules
+    // (android-tools no), `xdg-user-dirs` lo usa la propia app y `curl` lo
+    // exige su install.sh para el modo standalone (la app no lo usa).
+    // Nombres verificados con `pacman -Si`.
     const DEPS_ARCH: &[&str] = &[
         "git",
         "python",
@@ -626,13 +636,17 @@ pub fn install_gekko_adb(reporter: &dyn Reporter) -> Result<(), String> {
         "gtk3",
         "gtk4",
         "android-tools",
+        "android-udev",
         "scrcpy",
         "glib2",
         "xdg-utils",
+        "xdg-user-dirs",
+        "curl",
     ];
     // Nombres verificados contra el indice binario oficial de Solus: los
     // anteriores (`python-3`, `gtk-3`, `gtk-4`, `glib-2`) no existen en eopkg y
-    // hacian fallar siempre la instalacion en Solus.
+    // hacian fallar siempre la instalacion en Solus. Misma lista que el
+    // install.sh de Gekko ADB para Solus (sin android-udev).
     let deps: &[&str] = if solus {
         &[
             "git",
@@ -644,6 +658,8 @@ pub fn install_gekko_adb(reporter: &dyn Reporter) -> Result<(), String> {
             "scrcpy",
             "glib2",
             "xdg-utils",
+            "xdg-user-dirs",
+            "curl",
         ]
     } else {
         DEPS_ARCH
@@ -687,11 +703,17 @@ pub fn install_gekko_adb(reporter: &dyn Reporter) -> Result<(), String> {
         return Err("El instalador de Gekko ADB Studio fallo.".to_owned());
     }
 
+    // Con `--no-deps` el instalador de Gekko ADB no toca udev, asi que las
+    // reglas de `android-udev` recien instaladas no se aplican hasta reiniciar.
+    // Se recargan aqui (solo Arch, donde se instala android-udev). Un fallo no
+    // invalida la instalacion: la app ya esta en su sitio.
+    if !solus {
+        reload_android_udev_rules(reporter);
+    }
+
+    let launcher = gekko_adb_launcher_path(&paths);
     let mut entrypoints = BTreeMap::new();
-    entrypoints.insert(
-        "gekko-adb".to_string(),
-        paths.bin_home.join("gekko-adb").display().to_string(),
-    );
+    entrypoints.insert("gekko-adb".to_string(), launcher.display().to_string());
     crate::installer::record_source_module(
         &paths,
         crate::core::catalog::GEKKO_ADB_PRODUCT_ID,
@@ -704,13 +726,46 @@ pub fn install_gekko_adb(reporter: &dyn Reporter) -> Result<(), String> {
         "¡Gekko ADB Studio {version} instalado correctamente!"
     ));
     println!(
-        "      {}Ejecuta la suite con: {}/gekko-adb{}",
+        "      {}Ejecuta la suite con: {}{}",
         DIM,
-        paths.bin_home.display(),
+        launcher.display(),
         RESET
     );
     thread::sleep(Duration::from_secs(2));
     Ok(())
+}
+
+/// Ruta del launcher `gekko-adb` que crea el `install.sh` de Gekko ADB.
+///
+/// Ese instalador escribe siempre en `$HOME/.local/bin` y no consulta
+/// `XDG_BIN_HOME`, asi que aqui no vale `paths.bin_home`: con esa variable
+/// definida GekkoApp registraba y buscaba el launcher donde nunca se creo.
+pub fn gekko_adb_launcher_path(paths: &InstallPaths) -> PathBuf {
+    paths.home.join(".local/bin/gekko-adb")
+}
+
+/// Recarga las reglas udev de `android-udev` si estan instaladas (Arch).
+///
+/// Sin esto, tras instalar `android-udev` por primera vez, adb sigue viendo el
+/// telefono como "no permissions" hasta reiniciar. Solo informa del resultado:
+/// no aborta la instalacion de la app si udevadm o sudo fallan.
+fn reload_android_udev_rules(reporter: &dyn Reporter) {
+    const RULES: &str = "/usr/lib/udev/rules.d/51-android.rules";
+    if !Path::new(RULES).is_file() {
+        return;
+    }
+    reporter.step("Recargando las reglas udev de android-udev...");
+    let sudo = sudo_prefix();
+    if run_shell(&format!(
+        "{sudo} udevadm control --reload-rules && {sudo} udevadm trigger"
+    )) {
+        reporter.ok("Reglas udev recargadas: adb puede ver el dispositivo sin reiniciar.");
+    } else {
+        reporter.warn(
+            "No se pudieron recargar las reglas udev. Ejecuta a mano: \
+             sudo udevadm control --reload-rules && sudo udevadm trigger (o reinicia).",
+        );
+    }
 }
 
 /// Escapa una ruta para usarla como argumento unico de una shell.
@@ -1034,10 +1089,20 @@ pub fn uninstall_bauh(reporter: &dyn Reporter) -> Result<(), String> {
 }
 
 /// Desinstala Gekko ADB Studio.
+///
+/// Retira exactamente lo que crea el `install.sh` de Gekko ADB (launcher
+/// `~/.local/bin/gekko-adb`, `applications/com.gekko.adb.desktop`,
+/// `metainfo/com.gekko.adb.metainfo.xml`, el icono hicolor 512 `gekko-adb.png`
+/// y `share/gekko-adb` completo: `app`, `.env` y los `app.bak.*`), mas los
+/// lanzadores legacy `applications/GekkoADB.desktop` y
+/// `applications/org.thegekko.gekko_adb.desktop` y el clon que GekkoApp
+/// mantiene en `~/.cache/gekkoapp/gekko-adb`. Conserva `~/.config/gekko-adb` y
+/// `~/.local/state/gekko-adb/logs`, igual que `install.sh --uninstall`. Los
+/// paquetes del sistema instalados con sudo no se desinstalan.
 pub fn uninstall_gekko_adb(reporter: &dyn Reporter) -> Result<(), String> {
     reporter.header("DESINSTALANDO GEKKO ADB STUDIO");
     let paths = InstallPaths::detect()?;
-    let launcher = paths.bin_home.join("gekko-adb");
+    let launcher = gekko_adb_launcher_path(&paths);
     if launcher.exists() || fs::symlink_metadata(&launcher).is_ok() {
         let _ = fs::remove_file(&launcher);
     }
@@ -1045,8 +1110,8 @@ pub fn uninstall_gekko_adb(reporter: &dyn Reporter) -> Result<(), String> {
     if app_desktop.exists() {
         let _ = fs::remove_file(&app_desktop);
     }
-    // `GekkoADB.desktop` es el lanzador que dejaban versiones antiguas del
-    // instalador de Gekko ADB.
+    // `GekkoADB.desktop` y `org.thegekko.gekko_adb.desktop` son los lanzadores
+    // que dejaban versiones antiguas del instalador de Gekko ADB.
     for legacy in [
         "applications/GekkoADB.desktop",
         "applications/org.thegekko.gekko_adb.desktop",
@@ -1068,11 +1133,23 @@ pub fn uninstall_gekko_adb(reporter: &dyn Reporter) -> Result<(), String> {
     if icon_file.exists() {
         let _ = fs::remove_file(&icon_file);
     }
+    // `share/gekko-adb` entero: `app`, `.env` y las copias `app.bak.*` que deja
+    // el instalador al actualizar. La configuracion y los logs viven en otros
+    // directorios XDG y no se tocan.
     let gekko_adb_app_data = paths.data_home.join("gekko-adb");
     if gekko_adb_app_data.exists() {
         let _ = fs::remove_dir_all(&gekko_adb_app_data);
     }
+    // El clon con el que GekkoApp instalo la app; sin borrarlo quedaban decenas
+    // de MB en la cache y el catalogo podia seguir leyendo de el una revision.
+    let checkout = paths
+        .cache_home
+        .join(crate::core::catalog::GEKKO_ADB_PRODUCT_ID);
+    if checkout.exists() {
+        let _ = fs::remove_dir_all(&checkout);
+    }
     crate::installer::uninstall_registered_module(crate::core::catalog::GEKKO_ADB_PRODUCT_ID)?;
+    reporter.info("Se conservan ~/.config/gekko-adb y ~/.local/state/gekko-adb/logs.");
     reporter.ok("Gekko ADB Studio desinstalado correctamente.");
     thread::sleep(Duration::from_secs(1));
     Ok(())
@@ -1188,4 +1265,28 @@ pub fn uninstall_gaming(reporter: &dyn Reporter) -> bool {
         vec!["gamemode", "mangohud", "protonplus", "protonup-qt"]
     };
     desinstalar_paquetes(reporter, &packages)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gekko_adb_launcher_ignores_xdg_bin_home() {
+        // El install.sh de Gekko ADB escribe siempre en $HOME/.local/bin: aunque
+        // GekkoApp honre XDG_BIN_HOME para sus propios entrypoints, el launcher
+        // de Gekko ADB se registra y se retira donde ese instalador lo deja.
+        let paths = InstallPaths {
+            home: PathBuf::from("/home/Kito User"),
+            bin_home: PathBuf::from("/opt/xdg-bin"),
+            data_home: PathBuf::from("/tmp/data"),
+            state_home: PathBuf::from("/tmp/state"),
+            cache_home: PathBuf::from("/tmp/cache"),
+            versions_home: PathBuf::from("/tmp/versions"),
+        };
+        assert_eq!(
+            gekko_adb_launcher_path(&paths),
+            PathBuf::from("/home/Kito User/.local/bin/gekko-adb")
+        );
+    }
 }

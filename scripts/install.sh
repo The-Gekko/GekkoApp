@@ -11,12 +11,12 @@
 #
 # Variables de entorno:
 #   GEKKOAPP_PREFIX   Prefijo de instalacion (default: $HOME/.local)
-#   GEKKOAPP_SKIP_BUILD=1   No reconstruir si los binarios ya existen
+#   GEKKOAPP_SKIP_BUILD=1   No reconstruir si los binarios ya existen (no requiere cargo)
 #
 # Instala en el prefijo:
 #   bin/gekkoapp          CLI (Rust)
 #   bin/gekkoapp-gui      Control Center (Rust + Tauri v2)
-#   share/applications/gekkoapp-control-center.desktop
+#   share/applications/org.thegekko.gekkoapp.desktop
 #   share/icons/hicolor/512x512/apps/org.thegekko.gekkoapp.png
 #   share/icons/hicolor/symbolic/apps/org.thegekko.gekkoapp-symbolic.svg
 #
@@ -47,11 +47,13 @@ fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
 [ -d "$CRATE_DIR" ] || fail "no se encuentra el crate en $CRATE_DIR"
 [ -f "$DESKTOP_TEMPLATE" ] || fail "no se encuentra la plantilla .desktop en $DESKTOP_TEMPLATE"
-command -v cargo >/dev/null 2>&1 || fail "se requiere 'cargo' (instala rustup: https://rustup.rs)"
 
 echo "==> Prefijo de instalacion: $PREFIX"
 
 if [ "${GEKKOAPP_SKIP_BUILD:-0}" != "1" ]; then
+  # cargo solo hace falta para compilar: con GEKKOAPP_SKIP_BUILD=1 se
+  # reinstalan los binarios ya existentes aunque no haya toolchain.
+  command -v cargo >/dev/null 2>&1 || fail "se requiere 'cargo' (instala rustup: https://rustup.rs)"
   echo "==> Compilando CLI (release, --locked)..."
   cargo build --locked --release --manifest-path "$CRATE_DIR/Cargo.toml"
 
@@ -122,5 +124,5 @@ if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
 fi
 
 echo
-echo "¿Quieres evitarte la compilacion la proxima vez? Instala la GUI desde el release firmado:"
+echo "¿Quieres evitarte la compilacion la proxima vez? Instala la GUI desde el release verificado (manifiesto + SHA-256):"
 echo "  curl -fsSL https://raw.githubusercontent.com/The-Gekko/GekkoApp/main/scripts/install-release.sh | bash"

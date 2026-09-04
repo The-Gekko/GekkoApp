@@ -3,7 +3,7 @@
 
 El ejecutable `gekkoapp` compilado (ofrecido como release artefacto) es un binario **dinámicamente enlazado** de tipo ELF x86-64 PIE (Position Independent Executable).
 
-*   **Dependencias dinámicas:** Requiere `libc.so.6`, `libgcc_s.so.1` y `/lib64/ld-linux-x86-64.so.2` (con compatibilidad de símbolos hasta GLIBC 2.39).
+*   **Dependencias dinámicas:** Requiere `libc.so.6`, `libgcc_s.so.1` y `/lib64/ld-linux-x86-64.so.2`. La GLIBC mínima real no se fija a mano: `scripts/build-release-bundle.sh` la deduce de los símbolos versionados de los binarios (`objdump -T` → mayor `GLIBC_x.y`) y la escribe en `platform.libc.minimum` del manifiesto, que es lo que comprueban `installer.rs` e `install-release.sh` antes de instalar. Con la toolchain actual los binarios exigen GLIBC 2.39. El release v1.1.0 publicado declara 2.34 por un fallback (sin `objdump`) que ya no existe, aunque sus binarios exigen 2.39; el 1.2.0 lo corrige y el script ahora aborta si no puede medirla.
 *   **Seguridad y mitigaciones:** Cuenta por defecto con las protecciones NX (Non-Executable stack), GNU RELRO y `BIND_NOW` habilitadas por el compilador Rust.
 *   **Optimización:** El binario se distribuye `stripped` para reducir el tamaño final de ejecución.
 

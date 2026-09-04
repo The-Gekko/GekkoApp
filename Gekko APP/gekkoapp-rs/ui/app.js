@@ -492,14 +492,41 @@ async function init() {
     );
   });
 
+  // Cada modal enumera TODAS las mutaciones del flujo, incluidas las preguntas
+  // que el CLI haria por el camino y que la GUI acepta automaticamente.
   $("bauh-install").addEventListener("click", () => {
+    const solus = catalog && (catalog.distroId === "solus" || catalog.packageManager === "eopkg");
+    const pipxPkg = solus ? "pipx" : "python-pipx";
+    // Mismo orden que install_bauh en flow.rs; en Solus no hay paso de pacman,
+    // asi que la lista se numera al final para no dejar huecos.
+    const pasos = [];
+    if (!solus) {
+      pasos.push(
+        "Si tienes el paquete `bauh` de pacman, se DESINSTALARA con sudo para evitar conflictos " +
+          "(este dialogo es la confirmacion)."
+      );
+    }
+    pasos.push(`Se instalara el paquete ${pipxPkg} con sudo si falta.`);
+    pasos.push(
+      "Se descargara por HTTPS el ultimo release de github.com/The-Gekko/The-Gekko-Bauh " +
+        "(manifiesto + .tar.zst) y se verificaran su tamano y su SHA-256."
+    );
+    pasos.push(
+      "Se ejecutara `pipx install --force` sobre el arbol verificado: si ya habia un entorno pipx " +
+        "de Bauh (bauh, gekko-bauh o bauh-fork-the-gekko) se reemplaza por el nuevo."
+    );
+    pasos.push(
+      "Se escribiran ~/.local/share/applications/org.thegekko.bauh.desktop y el icono " +
+        "~/.local/share/icons/hicolor/512x512/apps/org.thegekko.bauh.png."
+    );
     guardedRun(
       {
         title: "Instalar la Tienda Bauh Fork",
-        body:
-          "Se descargara el release firmado, se verificara su SHA-256 y se instalara aislado con pipx. " +
-          "Si tienes el paquete `bauh` de los repositorios, se DESINSTALARA para evitar conflictos.",
-        detail: INSTALL_NOTE,
+        body: pasos.map((paso, indice) => `${indice + 1}) ${paso}`).join(" "),
+        detail:
+          "Hoy el ultimo release es v0.10.7 (se instala como distribucion `bauh`, lanzador ~/.local/bin/bauh); " +
+          "desde v0.10.8-gekko.1 se instalara como `gekko-bauh` (lanzadores gekko-bauh, gekko-bauh-tray y gekko-bauh-cli). " +
+          INSTALL_NOTE,
         confirmLabel: "Instalar",
       },
       "install_bauh",
@@ -508,10 +535,24 @@ async function init() {
   });
 
   $("gekko-adb-install").addEventListener("click", () => {
+    const solus = catalog && (catalog.distroId === "solus" || catalog.packageManager === "eopkg");
+    const paquetes = solus
+      ? "git python3 python-gobject libgtk-3 libgtk-4 android-tools scrcpy glib2 xdg-utils xdg-user-dirs curl (eopkg)"
+      : "git python python-gobject gtk3 gtk4 android-tools android-udev scrcpy glib2 xdg-utils xdg-user-dirs curl (pacman)";
     guardedRun(
       {
         title: "Instalar Gekko ADB Studio",
-        body: "Se clonara el codigo del repositorio y se ejecutara su instalador, que crea el lanzador, la entrada de menu y el icono.",
+        body:
+          `1) Se instalaran con sudo los paquetes: ${paquetes}. ` +
+          "2) Se clonara github.com/The-Gekko/gekko-adb (rama main, HEAD por HTTPS; el proyecto no publica releases, " +
+          "asi que NO hay manifiesto ni SHA-256 que verificar) en ~/.cache/gekkoapp/gekko-adb. " +
+          "3) Se ejecutara su install.sh --no-deps --assume-yes, que crea ~/.local/bin/gekko-adb, " +
+          "~/.local/share/applications/com.gekko.adb.desktop, ~/.local/share/metainfo/com.gekko.adb.metainfo.xml, " +
+          "~/.local/share/icons/hicolor/512x512/apps/gekko-adb.png y copia la app a ~/.local/share/gekko-adb/app " +
+          "(la version anterior queda en app.bak.<fecha>). " +
+          (solus
+            ? ""
+            : "4) Si existe /usr/lib/udev/rules.d/51-android.rules se ejecutara con sudo `udevadm control --reload-rules && udevadm trigger`. "),
         detail: INSTALL_NOTE,
         confirmLabel: "Instalar",
       },
@@ -524,7 +565,7 @@ async function init() {
     guardedRun(
       {
         title: "Actualizar GekkoApp",
-        body: "Se descargara el ultimo release firmado de GekkoApp y se reemplazaran sus binarios en tu carpeta de usuario.",
+        body: "Se descargara el ultimo release verificado (manifiesto + SHA-256) de GekkoApp y se reemplazaran sus binarios en tu carpeta de usuario.",
         detail: "No requiere sudo. Tendras que reiniciar el Control Center al terminar.",
         confirmLabel: "Actualizar",
       },
@@ -622,8 +663,16 @@ async function init() {
     guardedRun(
       {
         title: "Desinstalar la Tienda Bauh Fork",
-        body: "Se eliminara el entorno pipx de Bauh Fork y su integracion de escritorio.",
-        detail: "Tu configuracion de Bauh en ~/.config no se toca.",
+        body:
+          "1) `pipx uninstall` del entorno que GekkoApp registro al instalar (gekko-bauh, o bauh en el release v0.10.7) " +
+          "y de los nombres antiguos (bauh-fork-the-gekko); un entorno `bauh` a secas solo se retira si GekkoApp lo instalo. " +
+          "Con ello desaparecen los lanzadores de ~/.local/bin (gekko-bauh, gekko-bauh-tray, gekko-bauh-cli o bauh, bauh-tray, bauh-cli). " +
+          "2) Se borran ~/.local/share/applications/org.thegekko.bauh.desktop y " +
+          "~/.local/share/icons/hicolor/512x512/apps/org.thegekko.bauh.png. " +
+          "3) Se elimina la copia verificada del release en ~/.local/lib/kitotsu/bauh-fork-the-gekko/ y su entrada en el estado de GekkoApp.",
+        detail:
+          "Se conservan ~/.config/gekko-bauh (y ~/.config/bauh si la tenias). Los paquetes del sistema instalados " +
+          "con sudo no se desinstalan: python-pipx/pipx se queda. No requiere sudo.",
         confirmLabel: "Desinstalar",
         danger: true,
       },
@@ -636,8 +685,14 @@ async function init() {
     guardedRun(
       {
         title: "Desinstalar Gekko ADB Studio",
-        body: "Se eliminaran el lanzador, las entradas de menu, el icono y los archivos de la aplicacion.",
-        detail: "Tus presets y logs en ~/.config y ~/.local/state se conservan.",
+        body:
+          "Se borraran exactamente: ~/.local/bin/gekko-adb, ~/.local/share/applications/com.gekko.adb.desktop " +
+          "(y los legacy GekkoADB.desktop y org.thegekko.gekko_adb.desktop), ~/.local/share/metainfo/com.gekko.adb.metainfo.xml, " +
+          "~/.local/share/icons/hicolor/512x512/apps/gekko-adb.png, ~/.local/share/gekko-adb completo " +
+          "(app, .env y las copias app.bak.*) y el clon ~/.cache/gekkoapp/gekko-adb.",
+        detail:
+          "Se conservan ~/.config/gekko-adb y ~/.local/state/gekko-adb/logs. Los paquetes del sistema instalados " +
+          "con sudo (android-tools, scrcpy, gtk...) no se desinstalan. No requiere sudo.",
         confirmLabel: "Desinstalar",
         danger: true,
       },

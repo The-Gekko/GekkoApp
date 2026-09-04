@@ -190,8 +190,13 @@ fn installed_version_of(
     installed: &BTreeMap<String, String>,
     component: CatalogComponent,
 ) -> Option<String> {
-    if let Some(version) = installed.get(component.id()) {
-        return Some(version.clone());
+    // Gekko ADB se registra en el estado con el hash git del clon, no con su
+    // version: se consulta primero al lanzador para mostrar la real y el estado
+    // queda como respaldo. Para el resto el estado guarda la version del release.
+    if !matches!(component, CatalogComponent::GekkoAdb) {
+        if let Some(version) = installed.get(component.id()) {
+            return Some(version.clone());
+        }
     }
 
     let Ok(paths) = InstallPaths::detect() else {
@@ -232,10 +237,38 @@ fn installed_version_of(
             None
         }
         CatalogComponent::GekkoAdb => {
-            let launcher = paths.bin_home.join("gekko-adb");
+            // El install.sh de Gekko ADB no honra XDG_BIN_HOME: mismo criterio
+            // que al instalar y desinstalar.
+            let launcher = crate::core::flow::gekko_adb_launcher_path(&paths);
             let app_dir = paths.data_home.join("gekko-adb/app");
             if !launcher.exists() && !app_dir.exists() && !is_binary_in_path("gekko-adb") {
                 return None;
+            }
+            // La version real la imprime el propio lanzador (`Gekko ADB Studio
+            // 2.1.0`). Se invoca por ruta absoluta cuando esta en ~/.local/bin,
+            // porque `bash -c` no siempre lo tiene en el PATH.
+            let cmd = if launcher.exists() {
+                Some(crate::core::system::sh_quote(&launcher))
+            } else if is_binary_in_path("gekko-adb") {
+                Some("gekko-adb".to_string())
+            } else {
+                None
+            };
+            if let Some(cmd) = cmd {
+                let (ok, salida) =
+                    crate::core::system::run_shell_piped(&format!("{cmd} --version 2>/dev/null"));
+                let salida = salida.trim();
+                let version = salida
+                    .strip_prefix("Gekko ADB Studio ")
+                    .unwrap_or(salida)
+                    .trim();
+                if ok && !version.is_empty() && !version.contains('\n') {
+                    return Some(version.to_string());
+                }
+            }
+            // Respaldo: la revision que GekkoApp registro al instalar.
+            if let Some(version) = installed.get(component.id()) {
+                return Some(version.clone());
             }
             // El instalador de Gekko ADB **copia** los archivos a `app_dir`, no
             // clona: ahi nunca hay un `.git` que consultar. La unica revision
@@ -347,7 +380,7 @@ pub struct UpdateInfo {
 }
 
 /// Consulta la ultima version publicada de cada componente del catalogo con
-/// releases firmados (Kito, Bauh Fork y el propio GekkoApp; Gekko ADB Studio
+/// releases verificados (Kito, Bauh Fork y el propio GekkoApp; Gekko ADB Studio
 /// no publica releases todavia) y la compara con la instalada localmente.
 #[tauri::command]
 async fn check_updates() -> Result<Vec<UpdateInfo>, String> {

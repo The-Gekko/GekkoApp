@@ -5,8 +5,10 @@
 # Uso:
 #   ./scripts/build-release-bundle.sh [DIST_DIR]
 #
-# Requiere: cargo, tar (zstd), los binarios release ya compilados
-# (cargo build --release + cargo build --release --features gui).
+# Requiere: tar (zstd), python3, objdump (binutils) y los binarios release ya
+# compilados (cargo build --locked --release + --features gui --bin gekkoapp-gui).
+# platform.libc.minimum del manifiesto se deduce de los binarios con objdump;
+# si falta objdump el script aborta (GLIBC_MINIMUM solo para cross-build).
 #
 # Genera en DIST_DIR (default: releases/dist):
 #   gekkoapp-<version>.tar.zst
@@ -37,11 +39,15 @@ done
 # glibc minima real: se deduce de los simbolos versionados que exigen los
 # binarios en vez de fijar un numero a mano. Un valor demasiado bajo hace que el
 # motor de instalacion acepte el release en un sistema donde no puede arrancar.
+# Sin objdump se ABORTA: el antiguo fallback a 2.34 publico el release v1.1.0
+# declarando 2.34 cuando sus binarios exigen 2.39. Solo se admite fijar
+# GLIBC_MINIMUM a mano (cross-build), nunca adivinarla.
 detect_glibc_minimum() {
   local max="2.17" candidate
   if ! command -v objdump >/dev/null 2>&1; then
-    printf '%s' "${GLIBC_MINIMUM:-2.34}"
-    return
+    echo "error: se requiere 'objdump' (paquete binutils) para deducir la glibc minima de los binarios." >&2
+    echo "       Sin el, el manifiesto subdeclararia platform.libc.minimum. Instala binutils o fija GLIBC_MINIMUM." >&2
+    exit 1
   fi
   for bin in "$@"; do
     candidate="$(objdump -T "$bin" 2>/dev/null \
@@ -52,9 +58,13 @@ detect_glibc_minimum() {
   printf '%s' "$max"
 }
 
-GLIBC_MINIMUM="${GLIBC_MINIMUM:-$(detect_glibc_minimum \
-  "$CRATE_DIR/target/release/gekkoapp" "$CRATE_DIR/target/release/gekkoapp-gui")}"
-echo "==> glibc minima detectada: $GLIBC_MINIMUM"
+if [ -n "${GLIBC_MINIMUM:-}" ]; then
+  echo "==> glibc minima fijada por GLIBC_MINIMUM: $GLIBC_MINIMUM"
+else
+  GLIBC_MINIMUM="$(detect_glibc_minimum \
+    "$CRATE_DIR/target/release/gekkoapp" "$CRATE_DIR/target/release/gekkoapp-gui")"
+  echo "==> glibc minima detectada con objdump: $GLIBC_MINIMUM"
+fi
 
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT

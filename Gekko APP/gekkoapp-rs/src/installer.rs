@@ -246,6 +246,10 @@ pub struct InstallationPlan {
 
 #[derive(Debug, Clone)]
 pub struct InstallPaths {
+    /// `$HOME` del usuario. Lo necesitan los componentes cuyo instalador
+    /// externo no consulta XDG (el `install.sh` de Gekko ADB escribe siempre en
+    /// `$HOME/.local/bin`, aunque `bin_home` honre `XDG_BIN_HOME`).
+    pub home: PathBuf,
     pub bin_home: PathBuf,
     pub data_home: PathBuf,
     pub state_home: PathBuf,
@@ -298,11 +302,12 @@ impl InstallPaths {
         let cache_home = env_path("XDG_CACHE_HOME").unwrap_or_else(|| home.join(".cache"));
         let bin_home = env_path("XDG_BIN_HOME").unwrap_or_else(|| home.join(".local/bin"));
         Ok(Self {
+            versions_home: home.join(".local/lib/kitotsu"),
+            home,
             bin_home,
             data_home,
             state_home: state_home.join("gekkoapp"),
             cache_home: cache_home.join("gekkoapp"),
-            versions_home: home.join(".local/lib/kitotsu"),
         })
     }
 
@@ -1301,7 +1306,8 @@ fn write_state(path: &Path, state: &InstallationState) -> Result<(), String> {
 }
 
 /// Registra un componente instalado desde codigo fuente (p. ej. Gekko ADB
-/// Studio) en el estado de GekkoApp sin pasar por un release firmado.
+/// Studio) en el estado de GekkoApp sin pasar por un release verificado
+/// (manifiesto + SHA-256).
 pub(crate) fn record_source_module(
     paths: &InstallPaths,
     module_id: &str,
@@ -1418,7 +1424,7 @@ fn validate_manifest(
         ));
     }
     if manifest.release.tag != expected_tag
-        || manifest.product.version != expected_tag.trim_start_matches('v')
+        || !version_matches_tag(&manifest.product.version, expected_tag)
         || manifest.release.channel != "stable"
     {
         return Err(format!("version o canal invalido para {}", component_label));
@@ -1518,6 +1524,19 @@ fn validate_manifest(
     Ok(())
 }
 
+/// ¿Corresponde `product.version` a la etiqueta git `tag` del release?
+///
+/// La etiqueta es `v` + version, pero el fork de Bauh publica versiones locales
+/// de PEP 440 (`0.10.8+gekko.1`) cuya etiqueta git se escribe con guion
+/// (`v0.10.8-gekko.1`): git admite el `+`, pero el esquema del proyecto lo
+/// sustituye para que la etiqueta y el `pkgver` del AUR (que no admite guiones)
+/// se conviertan entre si con un solo cambio de caracter. Se aceptan las dos
+/// grafias; cualquier otra diferencia sigue siendo una version invalida.
+fn version_matches_tag(version: &str, tag: &str) -> bool {
+    let expected = tag.strip_prefix('v').unwrap_or(tag);
+    !version.is_empty() && (version == expected || version.replace('+', "-") == expected)
+}
+
 fn validate_module_dependencies(releases: &[PreparedRelease]) -> Result<(), String> {
     let available = releases
         .iter()
@@ -1556,32 +1575,62 @@ fn detect_glibc_version() -> Result<String, String> {
 pub(crate) fn compare_versions(left: &str, right: &str) -> Result<std::cmp::Ordering, String> {
     let left = parse_version(left)?;
     let right = parse_version(right)?;
-    let length = left.len().max(right.len());
+    let length = left.public.len().max(right.public.len());
     Ok((0..length)
         .map(|index| {
-            left.get(index)
+            left.public
+                .get(index)
                 .copied()
                 .unwrap_or_default()
-                .cmp(&right.get(index).copied().unwrap_or_default())
+                .cmp(&right.public.get(index).copied().unwrap_or_default())
         })
         .find(|ordering| *ordering != std::cmp::Ordering::Equal)
-        .unwrap_or(std::cmp::Ordering::Equal))
+        // Misma version publica: decide el sufijo (pre-release < publica < local).
+        .unwrap_or_else(|| left.suffix.cmp(&right.suffix)))
 }
 
-fn parse_version(value: &str) -> Result<Vec<u32>, String> {
+/// Version descompuesta para ordenar: los componentes numericos de la parte
+/// publica y el sufijo que la acompana.
+#[derive(Debug, PartialEq, Eq)]
+struct ParsedVersion {
+    public: Vec<u32>,
+    suffix: VersionSuffix,
+}
+
+/// Sufijo de una version. El orden de las variantes es el que impone al
+/// comparar: una pre-release (`1.2.0-rc.1`) queda POR DEBAJO de la version
+/// publica sin sufijo (`1.2.0`) y una etiqueta local (`0.10.8+gekko.1`) POR
+/// ENCIMA, como en PEP 440. Entre pre-releases manda la fase (dev < alpha <
+/// beta < rc) y despues su numero; entre etiquetas locales, sus numeros.
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum VersionSuffix {
+    PreRelease { phase: u8, numbers: Vec<u32> },
+    Release,
+    Local(Vec<u32>),
+}
+
+fn parse_version(value: &str) -> Result<ParsedVersion, String> {
     if value.is_empty() {
         return Err("version vacia".into());
     }
-    // Se separa la version publica de la etiqueta local de PEP 440
-    // (`0.10.8+gekko.1` -> publica `0.10.8`, local `gekko.1`) y se ignora
-    // cualquier sufijo no numerico de un componente (`2.41-rc1` -> `2.41`).
-    // Sin esto la campana de actualizaciones no podia comparar las versiones
-    // del fork de Bauh, que usa exactamente ese esquema.
-    let (public, local) = match value.split_once('+') {
-        Some((public, local)) => (public, Some(local)),
-        None => (value, None),
+    // Se separa la version publica del sufijo. El fork de Bauh usa etiquetas
+    // locales de PEP 440 (`0.10.8+gekko.1` -> publica `0.10.8`, local
+    // `gekko.1`) y su etiqueta git las escribe con guion (`v0.10.8-gekko.1`);
+    // la campana compara la version derivada de esa etiqueta con la instalada,
+    // asi que `+` y `-` se admiten como separador y ordenan igual. Pero un
+    // guion tambien introduce pre-releases (`1.2.0-rc.1`, `0.1.1-beta.2`) que
+    // NO pueden superar a la version publica: si no, la campana ofreceria una
+    // rc como actualizacion de la final. `classify_suffix` distingue los dos
+    // casos por el identificador con el que empieza el sufijo.
+    let (public, suffix) = match value.split_once('+') {
+        Some((public, suffix)) => (public, Some(suffix)),
+        None => match value.split_once('-') {
+            Some((public, suffix)) => (public, Some(suffix)),
+            None => (value, None),
+        },
     };
     let mut parts = Vec::new();
+    let mut inline_suffix = None;
     for component in public.split('.') {
         let digits = component
             .chars()
@@ -1598,28 +1647,52 @@ fn parse_version(value: &str) -> Result<Vec<u32>, String> {
                 .map_err(|_| format!("version invalida: {value}"))?,
         );
         if digits.len() != component.len() {
+            // Sufijo pegado al ultimo numero (`2.41rc1`): se clasifica como
+            // cualquier otro y se ignora lo que venga detras.
+            inline_suffix = Some(&component[digits.len()..]);
             break;
         }
     }
     if parts.is_empty() {
         return Err(format!("version invalida: {value}"));
     }
-    // Los numeros de la etiqueta local se anaden detras, para que
-    // `0.10.8+gekko.2` > `0.10.8+gekko.1` > `0.10.8`, como manda PEP 440. Los
-    // segmentos no numericos de la etiqueta (`gekko`) no participan en el
-    // orden: basta con distinguir builds del mismo upstream.
-    if let Some(local) = local {
-        for component in local.split('.') {
-            let digits = component
-                .chars()
-                .take_while(char::is_ascii_digit)
-                .collect::<String>();
-            if let Ok(number) = digits.parse::<u32>() {
-                parts.push(number);
-            }
-        }
+    let suffix = suffix
+        .or(inline_suffix)
+        .map_or(VersionSuffix::Release, classify_suffix);
+    Ok(ParsedVersion {
+        public: parts,
+        suffix,
+    })
+}
+
+/// Clasifica el sufijo de una version (lo que sigue a `+`, a `-` o al ultimo
+/// numero). Si empieza por un identificador de pre-release (`rc`, `alpha`,
+/// `beta`, `pre`, `dev`, `a`, `b`; sin distinguir mayusculas) es una
+/// pre-release; cualquier otro identificador (`gekko.1`) es una etiqueta local.
+/// Solo los numeros del sufijo participan en el orden: basta con distinguir
+/// builds del mismo upstream (`gekko.2` > `gekko.1`) o candidatas sucesivas
+/// (`rc.2` > `rc.1`).
+fn classify_suffix(text: &str) -> VersionSuffix {
+    let identifier = text
+        .chars()
+        .take_while(char::is_ascii_alphabetic)
+        .collect::<String>()
+        .to_ascii_lowercase();
+    let numbers = text
+        .split(|character: char| !character.is_ascii_digit())
+        .filter_map(|digits| digits.parse::<u32>().ok())
+        .collect::<Vec<_>>();
+    let phase = match identifier.as_str() {
+        "dev" => Some(0),
+        "a" | "alpha" => Some(1),
+        "b" | "beta" => Some(2),
+        "rc" | "pre" => Some(3),
+        _ => None,
+    };
+    match phase {
+        Some(phase) => VersionSuffix::PreRelease { phase, numbers },
+        None => VersionSuffix::Local(numbers),
     }
-    Ok(parts)
 }
 
 fn validate_manifest_path(path: &str) -> Result<(), String> {
@@ -1907,6 +1980,7 @@ mod tests {
         ));
         fs::create_dir_all(&root).unwrap();
         let paths = InstallPaths {
+            home: root.clone(),
             bin_home: root.join("bin"),
             data_home: root.join("data"),
             state_home: root.join("state"),
@@ -1954,6 +2028,7 @@ mod tests {
     #[test]
     fn kiui_desktop_uses_absolute_module_entrypoints() {
         let paths = InstallPaths {
+            home: PathBuf::from("/home/Kito User"),
             bin_home: PathBuf::from("/home/Kito User/.local/bin"),
             data_home: PathBuf::from("/tmp/data"),
             state_home: PathBuf::from("/tmp/state"),
@@ -2009,12 +2084,134 @@ mod tests {
             compare_versions("0.10.8+gekko.9", "0.10.9").unwrap(),
             std::cmp::Ordering::Less
         );
+        // Una pre-release nunca supera a la version publica sin sufijo.
         assert_eq!(
             compare_versions("1.0.0-rc1", "1.0.0").unwrap(),
-            std::cmp::Ordering::Equal
+            std::cmp::Ordering::Less
         );
         assert!(compare_versions("", "1.0").is_err());
         assert!(compare_versions("+gekko.1", "1.0").is_err());
+        assert!(compare_versions("-gekko.1", "1.0").is_err());
+
+        // La etiqueta git del fork lleva guion (`v0.10.8-gekko.1`): la version
+        // que la campana deriva de ella debe ordenar igual que la instalada.
+        assert_eq!(
+            compare_versions("0.10.8-gekko.1", "0.10.8+gekko.1").unwrap(),
+            std::cmp::Ordering::Equal
+        );
+        assert_eq!(
+            compare_versions("0.10.8-gekko.2", "0.10.8+gekko.1").unwrap(),
+            std::cmp::Ordering::Greater
+        );
+        assert_eq!(
+            compare_versions("0.10.8-gekko.2", "0.10.8-gekko.1").unwrap(),
+            std::cmp::Ordering::Greater
+        );
+        // Sin sufijo < con sufijo, como `vercmp`: 0.10.8 < 0.10.8-gekko.1.
+        assert_eq!(
+            compare_versions("0.10.8", "0.10.8-gekko.1").unwrap(),
+            std::cmp::Ordering::Less
+        );
+        // ...y la version publica manda sobre la etiqueta local.
+        assert_eq!(
+            compare_versions("0.10.9", "0.10.8-gekko.9").unwrap(),
+            std::cmp::Ordering::Greater
+        );
+    }
+
+    #[test]
+    fn orders_prereleases_below_and_local_labels_above_the_public_version() {
+        use std::cmp::Ordering::{Equal, Less};
+        // Cadena completa del esquema del fork de Bauh:
+        // 0.10.8 < 0.10.8+gekko.1 == 0.10.8-gekko.1 < 0.10.8-gekko.2 < 0.10.9.
+        assert_eq!(compare_versions("0.10.8", "0.10.8+gekko.1").unwrap(), Less);
+        assert_eq!(
+            compare_versions("0.10.8+gekko.1", "0.10.8-gekko.1").unwrap(),
+            Equal
+        );
+        assert_eq!(
+            compare_versions("0.10.8-gekko.1", "0.10.8-gekko.2").unwrap(),
+            Less
+        );
+        assert_eq!(compare_versions("0.10.8-gekko.2", "0.10.9").unwrap(), Less);
+
+        // Pre-releases con guion: por debajo de la final y ordenadas entre si
+        // por su numero. Antes `1.2.0-rc.1` superaba a `1.2.0` porque el guion
+        // se trataba siempre como etiqueta local.
+        assert_eq!(compare_versions("1.2.0-rc.1", "1.2.0").unwrap(), Less);
+        assert_eq!(compare_versions("1.2.0-rc.1", "1.2.0-rc.2").unwrap(), Less);
+        assert_eq!(compare_versions("0.1.1-beta.2", "0.1.1").unwrap(), Less);
+        assert_eq!(compare_versions("2.41-rc1", "2.41").unwrap(), Less);
+        assert_eq!(compare_versions("2.41rc1", "2.41").unwrap(), Less);
+        // Fase de la pre-release: alpha < beta < rc, sin distinguir mayusculas.
+        assert_eq!(compare_versions("1.0-alpha.3", "1.0-beta.1").unwrap(), Less);
+        assert_eq!(compare_versions("1.0-Beta.1", "1.0-RC.1").unwrap(), Less);
+        // Una pre-release de la siguiente version sigue por encima de la actual.
+        assert_eq!(compare_versions("1.2.0", "1.3.0-rc.1").unwrap(), Less);
+        // Y una pre-release queda por debajo de cualquier etiqueta local.
+        assert_eq!(
+            compare_versions("0.10.8-rc.1", "0.10.8-gekko.1").unwrap(),
+            Less
+        );
+    }
+
+    #[test]
+    fn manifest_version_may_use_hyphenated_git_tag() {
+        // Esquema del fork de Bauh: version PEP 440 con `+`, etiqueta con `-`.
+        assert!(version_matches_tag("0.10.8+gekko.1", "v0.10.8-gekko.1"));
+        // Un release cuya etiqueta conserva el `+` tambien es valido.
+        assert!(version_matches_tag("0.10.8+gekko.1", "v0.10.8+gekko.1"));
+        // Versiones sin etiqueta local: igual que siempre.
+        assert!(version_matches_tag("0.10.7", "v0.10.7"));
+        assert!(version_matches_tag("1.2.0", "v1.2.0"));
+        // Cualquier otra diferencia sigue rechazandose.
+        assert!(!version_matches_tag("0.10.8+gekko.2", "v0.10.8-gekko.1"));
+        assert!(!version_matches_tag("0.10.8", "v0.10.8-gekko.1"));
+        assert!(!version_matches_tag("0.10.8-gekko.1", "v0.10.8+gekko.1"));
+        assert!(!version_matches_tag("", "v"));
+
+        let mut manifest = test_manifest();
+        assert!(validate_manifest(
+            &manifest,
+            "kiui",
+            "kiui",
+            &["KitotsuMolina/KiUI"],
+            "v0.1.1",
+            "x86_64-unknown-linux-gnu",
+        )
+        .is_ok());
+
+        manifest.product.version = "0.1.1+gekko.1".into();
+        manifest.release.tag = "v0.1.1-gekko.1".into();
+        assert!(validate_manifest(
+            &manifest,
+            "kiui",
+            "kiui",
+            &["KitotsuMolina/KiUI"],
+            "v0.1.1-gekko.1",
+            "x86_64-unknown-linux-gnu",
+        )
+        .is_ok());
+        manifest.release.tag = "v0.1.1+gekko.1".into();
+        assert!(validate_manifest(
+            &manifest,
+            "kiui",
+            "kiui",
+            &["KitotsuMolina/KiUI"],
+            "v0.1.1+gekko.1",
+            "x86_64-unknown-linux-gnu",
+        )
+        .is_ok());
+        // El tag del manifiesto debe seguir siendo el tag REAL de GitHub.
+        assert!(validate_manifest(
+            &manifest,
+            "kiui",
+            "kiui",
+            &["KitotsuMolina/KiUI"],
+            "v0.1.1-gekko.1",
+            "x86_64-unknown-linux-gnu",
+        )
+        .is_err());
     }
 
     #[test]
@@ -2039,6 +2236,7 @@ mod tests {
             manifest,
         };
         let paths = InstallPaths {
+            home: root.clone(),
             bin_home: root.join("bin"),
             data_home: root.join("data"),
             state_home: root.join("state"),
