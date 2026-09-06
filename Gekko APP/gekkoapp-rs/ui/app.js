@@ -524,8 +524,9 @@ async function init() {
         title: "Instalar la Tienda Bauh Fork",
         body: pasos.map((paso, indice) => `${indice + 1}) ${paso}`).join(" "),
         detail:
-          "Hoy el ultimo release es v0.10.7 (se instala como distribucion `bauh`, lanzador ~/.local/bin/bauh); " +
-          "desde v0.10.8-gekko.1 se instalara como `gekko-bauh` (lanzadores gekko-bauh, gekko-bauh-tray y gekko-bauh-cli). " +
+          "Se instala el ultimo release publicado del fork: los anteriores a v0.10.8-gekko.1 se instalan como " +
+          "distribucion `bauh` (lanzador ~/.local/bin/bauh) y a partir de esa etiqueta como `gekko-bauh` " +
+          "(lanzadores gekko-bauh, gekko-bauh-tray y gekko-bauh-cli). " +
           INSTALL_NOTE,
         confirmLabel: "Instalar",
       },

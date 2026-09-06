@@ -186,7 +186,18 @@ mod tests {
         assert_eq!(plan.releases.len(), 1);
         let release = &plan.releases[0];
         assert_eq!(release.component_label, BAUH_LABEL);
-        assert_eq!(release.manifest.product.version, "0.10.7");
+        // La version publicada cambia en cada release, asi que se comprueba que venga
+        // informada y que empiece por un numero, no un valor concreto: fijar aqui
+        // "0.10.7" obligaba a tocar el test cada vez que el fork publica algo.
+        assert!(
+            release
+                .manifest
+                .product
+                .version
+                .starts_with(|caracter: char| caracter.is_ascii_digit()),
+            "version del manifiesto inesperada: {}",
+            release.manifest.product.version
+        );
         assert_eq!(release.manifest.install_method, "python_pipx");
         assert!(release
             .manifest_url
