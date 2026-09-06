@@ -4,6 +4,7 @@ version = "1.2.0"
 edition = "2021"
 authors = ["The-Gekko"]
 description = "GekkoApp - Arch Linux Post-Install & Config Tool"
+license = "Zlib"
 
 [features]
 default = []

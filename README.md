@@ -35,9 +35,9 @@ GekkoApp es el punto de entrada de tres proyectos de The-Gekko. Cada uno se pued
 
 | Proyecto | Qué es | Repositorio | Instalarlo por separado | Qué hace GekkoApp por él |
 | :--- | :--- | :--- | :--- | :--- |
-| **GekkoApp** (Control Center) | Esta app: instalador y actualizador de todo lo demás (Rust + Tauri v2). | [The-Gekko/GekkoApp](https://github.com/The-Gekko/GekkoApp) | `curl -fsSL https://raw.githubusercontent.com/The-Gekko/GekkoApp/main/scripts/install-release.sh \| bash` | Se auto-actualiza desde su último release (manifiesto + SHA-256, sin sudo) y reemplaza los symlinks de `~/.local/bin`. |
-| **Gekko ADB Studio** | Suite GTK 3/4 de control ADB: scrcpy, shell, debloat, presets. | [The-Gekko/gekko-adb](https://github.com/The-Gekko/gekko-adb) | `curl -fsSL https://raw.githubusercontent.com/The-Gekko/gekko-adb/main/install.sh \| bash` (o su README) | Instala con sudo los paquetes `git python python-gobject gtk3 gtk4 android-tools android-udev scrcpy glib2 xdg-utils xdg-user-dirs curl` (Arch) o `git python3 python-gobject libgtk-3 libgtk-4 android-tools scrcpy glib2 xdg-utils xdg-user-dirs curl` (Solus); clona `main` en `~/.cache/gekkoapp/gekko-adb`; ejecuta su `install.sh --no-deps --assume-yes`; en Arch recarga udev (`udevadm control --reload-rules && udevadm trigger`) si existe `51-android.rules`. |
-| **bauh Gekko Edition** (Bauh Fork) | Fork de bauh: tienda gráfica para AUR, Chaotic AUR, Flatpak y eopkg. | [The-Gekko/The-Gekko-Bauh](https://github.com/The-Gekko/The-Gekko-Bauh) | `curl -fsSL https://raw.githubusercontent.com/The-Gekko/The-Gekko-Bauh/master/install.sh \| bash` (o su README) | Si existe el paquete `bauh` de pacman pide confirmación y lo desinstala (solo Arch); instala `python-pipx` (Arch) o `pipx` (Solus) si falta; resuelve `/releases/latest`, descarga manifiesto + `.tar.zst`, verifica tamaño y SHA-256; `pipx install --force` del árbol verificado; crea `org.thegekko.bauh.desktop` e icono hicolor 512. |
+| **GekkoApp** (Control Center) | Esta app: instalador y actualizador de todo lo demás (Rust + Tauri v2). | [The-Gekko/GekkoApp](https://github.com/The-Gekko/GekkoApp) | `curl -fsSL https://raw.githubusercontent.com/The-Gekko/GekkoApp/main/scripts/install-release.sh \| bash`, o clonando este repositorio ([opción 2](#opción-2--clonando-el-repositorio-compila-con-cargo)). | Se auto-actualiza desde su último release (manifiesto + SHA-256, sin sudo) y reemplaza los symlinks de `~/.local/bin`. |
+| **Gekko ADB Studio** | Suite GTK 3/4 de control ADB: scrcpy, shell, debloat, presets. | [The-Gekko/gekko-adb](https://github.com/The-Gekko/gekko-adb) | `curl -fsSL https://raw.githubusercontent.com/The-Gekko/gekko-adb/main/install.sh \| bash`, o clonando su repositorio ([README](https://github.com/The-Gekko/gekko-adb#readme)). | Instala con sudo los paquetes `git python python-gobject gtk3 gtk4 android-tools android-udev scrcpy glib2 xdg-utils xdg-user-dirs curl` (Arch) o `git python3 python-gobject libgtk-3 libgtk-4 android-tools scrcpy glib2 xdg-utils xdg-user-dirs curl` (Solus); clona `main` en `~/.cache/gekkoapp/gekko-adb`; ejecuta su `install.sh --no-deps --assume-yes`; en Arch recarga udev (`udevadm control --reload-rules && udevadm trigger`) si existe `51-android.rules`. |
+| **bauh Gekko Edition** (Bauh Fork) | Fork de bauh: tienda gráfica para AUR, Chaotic AUR, Flatpak y eopkg. | [The-Gekko/The-Gekko-Bauh](https://github.com/The-Gekko/The-Gekko-Bauh) | `curl -fsSL https://raw.githubusercontent.com/The-Gekko/The-Gekko-Bauh/master/install.sh \| bash`, o clonando su repositorio ([README](https://github.com/The-Gekko/The-Gekko-Bauh#readme)). | Si existe el paquete `bauh` de pacman pide confirmación y lo desinstala (solo Arch); instala `python-pipx` (Arch) o `pipx` (Solus) si falta; resuelve `/releases/latest`, descarga manifiesto + `.tar.zst`, verifica tamaño y SHA-256; `pipx install --force` del árbol verificado; crea `org.thegekko.bauh.desktop` e icono hicolor 512. |
 
 Notas honestas:
 
@@ -48,13 +48,15 @@ Notas honestas:
 
 ## 📦 Instalación y Desinstalación
 
+Hay **exactamente dos formas** de instalar GekkoApp: **por `curl`** (opción 1, descarga el release verificado y no compila nada) o **clonando el repositorio** (opción 2, compila con `cargo`). Elige **una sola**: si cambias de vía, desinstala primero con el `--uninstall` de más abajo, que retira tanto los symlinks del release como los binarios copiados desde el código fuente.
+
 ### Requisitos
 
 - Arch Linux, Garuda o Solus (o derivadas con `ID_LIKE=arch`/`solus`), `x86_64` y sesión con **systemd de usuario**.
-- **glibc** igual o superior a la mínima que declara el manifiesto del release (`platform.libc.minimum`). El instalador la compara con `getconf GNU_LIBC_VERSION` y aborta con un mensaje claro si el sistema es más antiguo. Los binarios actuales exigen GLIBC 2.39 (véase `Gekko APP/README.md`). Aviso: el release v1.1.0 publicado declara 2.34 por un fallo del empaquetado ya corregido; si tu glibc es 2.34–2.38 el instalador no te avisará y el binario no arrancará. El 1.2.0 declara la mínima real (2.39).
-- `curl`, `tar` (con zstd) y `python3` para el instalador de releases.
+- **Opción 1 (curl):** `curl`, `tar` (con zstd), `python3` y `getconf`. Además, **glibc** igual o superior a la mínima que declara el manifiesto del release (`platform.libc.minimum`): el instalador la compara con `getconf GNU_LIBC_VERSION` y aborta con un mensaje claro si el sistema es más antiguo. Esa mínima no se fija a mano: `scripts/build-release-bundle.sh` la deduce de los símbolos versionados de los binarios (`objdump -T` → mayor `GLIBC_x.y`) y la escribe en el manifiesto del release; sin `objdump` el empaquetado aborta en vez de adivinarla. Con la toolchain actual los binarios exigen **GLIBC 2.39**. Aviso: el release v1.1.0 publicado declara 2.34 por un fallo del empaquetado ya corregido; si tu glibc es 2.34–2.38 el instalador no te avisará y el binario no arrancará. El 1.2.0 declara la mínima real (2.39).
+- **Opción 2 (clonar):** `git` y `cargo`/`rustc` ([rustup](https://rustup.rs)), más las dependencias de compilación de Tauri v2 en Linux; en Arch son `base-devel`, `webkit2gtk-4.1`, `gtk3` y `libsoup3`. Aquí no hay comprobación de glibc: los binarios los compila tu propia máquina.
 
-### Instalar el Control Center (sin compilar)
+### Opción 1 — Por `curl` (release verificado, sin compilar)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/The-Gekko/GekkoApp/main/scripts/install-release.sh | bash
@@ -71,6 +73,34 @@ Qué crea:
 
 Al terminar se abre el Control Center: **desde ahí instalas, actualizas o desinstalas cualquier componente**.
 
+### Opción 2 — Clonando el repositorio (compila con `cargo`)
+
+```bash
+git clone https://github.com/The-Gekko/GekkoApp.git
+cd GekkoApp
+./scripts/install.sh            # cargo build --locked --release (+ --features gui) e instala en ~/.local
+```
+
+`scripts/install.sh` es idempotente y no usa `sudo`. Qué crea:
+
+- `~/.local/bin/gekkoapp` y `~/.local/bin/gekkoapp-gui` — copias de los binarios recién compilados (CLI y Control Center). Si en esas rutas había symlinks del motor de releases (opción 1), los retira avisando.
+- `~/.local/share/applications/org.thegekko.gekkoapp.desktop` — entrada de menú (mismo nombre que la de la opción 1, para no duplicarla).
+- `~/.local/share/icons/hicolor/512x512/apps/org.thegekko.gekkoapp.png` y `.../symbolic/apps/org.thegekko.gekkoapp-symbolic.svg` — iconos.
+
+Variantes útiles dentro de esta misma vía:
+
+```bash
+GEKKOAPP_SKIP_BUILD=1 ./scripts/install.sh   # reinstala los binarios ya compilados (no requiere cargo)
+GEKKOAPP_PREFIX=~/opt/gekko ./scripts/install.sh  # instala en otro prefijo (por defecto ~/.local)
+./GekkoApp.sh                   # Control Center desde el clon (compila con cargo la primera vez)
+./GekkoApp.sh --cli             # menú en terminal, con submenú de desinstalación [d]
+gekkoapp --help                 # ayuda del CLI; gekkoapp --version imprime la versión
+```
+
+El CLI acepta `--help`/`-h` y `--version`/`-V`, sale con código 2 ante una opción desconocida y termina limpiamente si la entrada está cerrada (`gekkoapp </dev/null`).
+
+Para desinstalar lo que dejó esta vía se usa el mismo `--uninstall` de más abajo: reconoce y retira también los binarios copiados por `scripts/install.sh`.
+
 ### Desinstalar GekkoApp por completo
 
 ```bash
@@ -78,18 +108,6 @@ curl -fsSL https://raw.githubusercontent.com/The-Gekko/GekkoApp/main/scripts/ins
 ```
 
 Retira los dos symlinks (o los binarios que dejó `scripts/install.sh`, si son de GekkoApp), la entrada de menú, los iconos, todas las versiones de `~/.local/lib/kitotsu/gekkoapp` y los directorios que queden vacíos; también retira la entrada `gekkoapp` del estado del motor (`~/.local/state/gekkoapp/installations-v1.json`, sin tocar los demás módulos) y el artefacto `gekkoapp-*.tar.zst` que el auto-update dejó en `~/.cache/gekkoapp/artifacts`. No toca los componentes instalados desde el Control Center: desinstálalos antes desde la GUI o el CLI si no los quieres.
-
-### Desde el código fuente (desarrolladores)
-
-```bash
-./scripts/install.sh            # cargo build --locked --release (+ --features gui) e instala en ~/.local
-GEKKOAPP_SKIP_BUILD=1 ./scripts/install.sh   # reinstala los binarios ya compilados (no requiere cargo)
-./GekkoApp.sh                   # Control Center (compila con cargo la primera vez)
-./GekkoApp.sh --cli             # menú en terminal, con submenú de desinstalación [d]
-gekkoapp --help                 # ayuda del CLI; gekkoapp --version imprime la versión
-```
-
-`GEKKOAPP_PREFIX` cambia el prefijo de `scripts/install.sh` (por defecto `~/.local`). El CLI acepta `--help`/`-h` y `--version`/`-V`, y termina limpiamente si la entrada está cerrada (`gekkoapp </dev/null`).
 
 ## 🔧 Verificación y desarrollo
 
@@ -125,4 +143,4 @@ Scripts de release (desde la raíz del repositorio):
 
 ## 📄 Licencia
 
-MIT · Desarrollado con ❤️ para la comunidad de Linux por **The-Gekko** y colaboradores.
+**zlib/libpng** (SPDX `Zlib`), (c) 2026 The-Gekko — véase [`LICENSE`](LICENSE) · Desarrollado con ❤️ para la comunidad de Linux por **The-Gekko** y colaboradores.

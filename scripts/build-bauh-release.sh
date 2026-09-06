@@ -13,7 +13,8 @@
 #   DIST_DIR  directorio de salida (archivo .tar.zst + <product>-<target>.manifest.json).
 #            Default: $BAUH_REPO_ROOT/releases/dist
 #
-# Esquema de versiones del fork (docs/DISTRIBUCION.md del fork):
+# Esquema de versiones del fork (el fork ya no publica su documentacion
+# interna, asi que el esquema queda escrito aqui):
 #   bauh.__version__      X.Y.Z+gekko.N   (PEP 440, local version)  -> product.version
 #   etiqueta git          vX.Y.Z-gekko.N  (con GUION)               -> release.tag
 #   nombre del artefacto  bauh-fork-the-gekko-X.Y.Z.gekko.N.tar.zst (el '+' se
