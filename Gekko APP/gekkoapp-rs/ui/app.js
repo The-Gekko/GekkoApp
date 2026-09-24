@@ -516,8 +516,9 @@ async function init() {
         "de Bauh (bauh, gekko-bauh o bauh-fork-the-gekko) se reemplaza por el nuevo."
     );
     pasos.push(
-      "Se escribiran ~/.local/share/applications/org.thegekko.bauh.desktop y el icono " +
-        "~/.local/share/icons/hicolor/512x512/apps/org.thegekko.bauh.png."
+      "Se escribiran ~/.local/share/applications/org.thegekko.bauh.desktop (un unico lanzador) y el icono " +
+        "~/.local/share/icons/hicolor/512x512/apps/org.thegekko.bauh.png. Si una version anterior instalada " +
+        "desde GekkoApp dejo el lanzador de la bandeja (org.thegekko.bauh.tray.desktop), se retira."
     );
     guardedRun(
       {

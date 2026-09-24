@@ -483,11 +483,22 @@ impl InstallationPlan {
         }
         validate_activation_destinations(&installed, paths, &state)?;
         for (release, root) in installed {
+            let previous_owned = state
+                .modules
+                .get(&release.manifest.product.id)
+                .map(|module| module.owned_paths.clone())
+                .unwrap_or_default();
             let activation = if release.manifest.install_method == "python_pipx" {
                 activate_pipx_release(release, &root, paths, &mut state)
             } else {
                 activate_release(release, &root, paths, &mut state)
             };
+            if activation.is_ok() {
+                // No se aborta la actualizacion: la version nueva ya esta activa.
+                for failure in retire_stale_owned_paths(&previous_owned, &state) {
+                    eprintln!("Atención: no se pudo retirar {failure}");
+                }
+            }
             // El estado se escribe tras cada activacion. Si una falla a mitad de
             // un plan de varios componentes, lo ya activado queda registrado:
             // se puede desinstalar y un reintento no lo vera como "ruta ajena".
@@ -499,6 +510,31 @@ impl InstallationPlan {
         }
         Ok(state)
     }
+}
+
+/// Borra las rutas que la version anterior de un componente dejo registradas y
+/// que la nueva ya no declara. Sin esto se quedaban en disco y fuera del estado,
+/// asi que ni la desinstalacion las veia: el Bauh Fork dejo de declarar la
+/// entrada de menu de su bandeja (`org.thegekko.bauh.tray`) y la cuadricula de
+/// aplicaciones seguia mostrando dos Bauh tras actualizar. Solo se tocan rutas
+/// que GekkoApp registro como propias y que ningun modulo reclama ya.
+fn retire_stale_owned_paths(previous: &[OwnedPath], state: &InstallationState) -> Vec<String> {
+    let still_owned = state
+        .modules
+        .values()
+        .flat_map(|module| module.owned_paths.iter().map(|owned| owned.path.as_str()))
+        .collect::<BTreeSet<_>>();
+    let mut failures = Vec::new();
+    for owned in previous {
+        let path = Path::new(&owned.path);
+        if still_owned.contains(owned.path.as_str()) || fs::symlink_metadata(path).is_err() {
+            continue;
+        }
+        if let Err(error) = fs::remove_file(path) {
+            failures.push(format!("{}: {error}", owned.path));
+        }
+    }
+    failures
 }
 
 fn validate_activation_destinations(
@@ -2256,6 +2292,187 @@ mod tests {
         assert!(paths.state_file().is_file());
         assert_eq!(state.modules["kiui"].version, "0.1.1");
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn update_retires_desktop_entries_the_new_release_no_longer_declares() {
+        // Bauh Fork 0.10.8+gekko.1 -> gekko.2: la version nueva deja de declarar la
+        // entrada de menu de la bandeja, que no debe quedarse en la cuadricula.
+        let root = env::temp_dir().join(format!(
+            "gekkoapp-stale-desktop-test-{}-{}",
+            std::process::id(),
+            now_unix().unwrap()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let paths = InstallPaths {
+            home: root.clone(),
+            bin_home: root.join("bin"),
+            data_home: root.join("data"),
+            state_home: root.join("state"),
+            cache_home: root.join("cache"),
+            versions_home: root.join("versions"),
+        };
+        let applications = paths.data_home.join("applications");
+        let tray_desktop = applications.join("org.test.app.tray.desktop");
+        let tray_icon = paths
+            .data_home
+            .join("icons/hicolor/512x512/apps/org.test.app.tray.png");
+
+        let first = desktop_test_release(&paths, "1.0.0", &["org.test.app", "org.test.app.tray"]);
+        InstallationPlan::single(first).install(&paths).unwrap();
+        assert!(tray_desktop.is_file());
+        assert!(tray_icon.is_file());
+
+        let second = desktop_test_release(&paths, "1.0.1", &["org.test.app"]);
+        let state = InstallationPlan::single(second).install(&paths).unwrap();
+
+        assert!(applications.join("org.test.app.desktop").is_file());
+        assert!(!tray_desktop.exists());
+        assert!(!tray_icon.exists());
+        assert!(state.modules["app"]
+            .owned_paths
+            .iter()
+            .all(|owned| !owned.path.contains("org.test.app.tray")));
+        assert_eq!(state.modules["app"].version, "1.0.1");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn stale_path_retirement_keeps_paths_that_are_still_owned() {
+        let root = env::temp_dir().join(format!(
+            "gekkoapp-stale-owned-test-{}-{}",
+            std::process::id(),
+            now_unix().unwrap()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let owned = |name: &str| OwnedPath {
+            path: root.join(name).display().to_string(),
+            kind: "file".into(),
+            sha256: None,
+            target: None,
+        };
+        for name in ["kept", "stale", "other-module"] {
+            fs::write(root.join(name), b"x").unwrap();
+        }
+        let module = |owned_paths: Vec<OwnedPath>| InstalledModule {
+            version: "1".into(),
+            contract_version: "1.0".into(),
+            active_root: String::new(),
+            manifest_url: String::new(),
+            artifact_url: String::new(),
+            artifact_sha256: String::new(),
+            entrypoints: BTreeMap::new(),
+            owned_paths,
+            activated_at_unix: 0,
+            pipx_distribution: None,
+        };
+        let mut state = InstallationState::default();
+        state
+            .modules
+            .insert("app".into(), module(vec![owned("kept")]));
+        state
+            .modules
+            .insert("other".into(), module(vec![owned("other-module")]));
+
+        let previous = vec![
+            owned("kept"),
+            owned("stale"),
+            owned("other-module"),
+            owned("missing"),
+        ];
+        let failures = retire_stale_owned_paths(&previous, &state);
+
+        assert!(failures.is_empty(), "{failures:?}");
+        assert!(root.join("kept").is_file());
+        assert!(!root.join("stale").exists());
+        assert!(root.join("other-module").is_file());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Deja en la cache un artefacto con un ejecutable, una plantilla .desktop y un
+    /// icono, y devuelve un release con una entrada de menu por cada id.
+    fn desktop_test_release(
+        paths: &InstallPaths,
+        version: &str,
+        application_ids: &[&str],
+    ) -> PreparedRelease {
+        let files: [(&str, &[u8], u32); 3] = [
+            ("bin/app", b"#!/bin/sh\nexit 0\n", 0o755),
+            (
+                "share/app.desktop.template",
+                b"[Desktop Entry]\nType=Application\nName=App\nExec=@EXECUTABLE@\n",
+                0o644,
+            ),
+            ("share/app.png", b"png", 0o644),
+        ];
+        let file_name = format!("app-{version}.tar.zst");
+        let artifacts = paths.cache_home.join("artifacts");
+        fs::create_dir_all(&artifacts).unwrap();
+        let archive_path = artifacts.join(&file_name);
+        let encoder =
+            zstd::stream::write::Encoder::new(File::create(&archive_path).unwrap(), 1).unwrap();
+        let mut archive = tar::Builder::new(encoder);
+        for (path, bytes, mode) in files {
+            let mut header = tar::Header::new_gnu();
+            header.set_path(format!("app-{version}/{path}")).unwrap();
+            header.set_size(bytes.len() as u64);
+            header.set_mode(mode);
+            header.set_cksum();
+            archive.append(&header, Cursor::new(bytes)).unwrap();
+        }
+        archive.into_inner().unwrap().finish().unwrap();
+        let archive_bytes = fs::read(&archive_path).unwrap();
+
+        let payload = files
+            .iter()
+            .map(|(path, bytes, mode)| {
+                let kind = if *mode == 0o755 {
+                    "executable"
+                } else if path.ends_with(".png") {
+                    "icon"
+                } else {
+                    "desktop-entry-template"
+                };
+                serde_json::json!({
+                    "path": path,
+                    "kind": kind,
+                    "mode": format!("0{mode:o}"),
+                    "size_bytes": bytes.len(),
+                    "sha256": sha256_bytes(bytes),
+                })
+            })
+            .collect::<Vec<_>>();
+        let desktop_entries = application_ids
+            .iter()
+            .map(|id| {
+                serde_json::json!({
+                    "application_id": id,
+                    "template": "share/app.desktop.template",
+                    "entrypoint": "app",
+                    "icons": [{"source": "share/app.png", "theme": "hicolor", "size": 512, "format": "png"}],
+                })
+            })
+            .collect::<Vec<_>>();
+        let manifest = serde_json::from_value(serde_json::json!({
+            "schema_version": 1,
+            "kind": "kitotsu.release-artifact",
+            "distribution_contract": "1.0",
+            "product": {"id": "app", "version": version, "repository": "Test/App", "contract_version": "1.0"},
+            "release": {"tag": format!("v{version}"), "channel": "stable"},
+            "platform": {"os": "linux", "arch": "x86_64", "target": "x86_64-unknown-linux-gnu", "libc": {"family": "glibc", "minimum": "2.34"}},
+            "artifact": {"file_name": file_name, "format": "tar.zst", "size_bytes": archive_bytes.len(), "sha256": sha256_bytes(&archive_bytes)},
+            "payload": payload,
+            "entrypoints": [{"name": "app", "path": "bin/app"}],
+            "requirements": {"modules": [], "host_capabilities": []},
+            "integrations": {"desktop_entries": desktop_entries}
+        }))
+        .unwrap();
+        PreparedRelease {
+            component_label: "App".into(),
+            manifest_url: "https://example.test/manifest.json".into(),
+            artifact_url: "https://example.test/archive.tar.zst".into(),
+            manifest,
+        }
     }
 
     fn create_test_archive(path: &Path, executable: &[u8]) {

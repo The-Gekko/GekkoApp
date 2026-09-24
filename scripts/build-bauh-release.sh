@@ -24,7 +24,7 @@
 # 'v'+version o 'v'+version con '+' -> '-'.
 #
 # El script copia SOLO lo necesario para que `pipx install` construya el
-# paquete, genera las plantillas .desktop (app y bandeja) y el icono PNG
+# paquete, genera la plantilla .desktop (solo la aplicacion) y el icono PNG
 # (contrato hicolor), y calcula payload + hashes del artefacto.
 #
 # Este mismo script esta vendorizado en el fork como
@@ -55,9 +55,6 @@ PRODUCT_ID="bauh-fork-the-gekko"
 # porque es el prefijo de los artefactos ya publicados.
 REPOSITORY="The-Gekko/The-Gekko-Bauh"
 APP_ID="org.thegekko.bauh"
-# Entrada de menu de la bandeja (gekko-bauh-tray). validate_application_id exige
-# un id inverso-DNS de al menos tres segmentos; cuatro son validos.
-TRAY_APP_ID="org.thegekko.bauh.tray"
 # Bauh es Python puro: la glibc no la impone el artefacto, pero el contrato
 # exige declarar una minima. 2.34 cubre cualquier Arch/Solus soportado.
 GLIBC_MINIMUM="${GLIBC_MINIMUM:-2.34}"
@@ -138,22 +135,10 @@ if grep -q '@' "$DESKTOP_TEMPLATE" && [ "$(grep -o '@' "$DESKTOP_TEMPLATE" | wc 
   exit 1
 fi
 
-# Segunda entrada de menu: la bandeja (gekko-bauh-tray.desktop, entrypoint
-# gekko-bauh-tray). Es opcional: un checkout antiguo sin ella sigue
-# empaquetandose con una sola entrada. El motor instala el icono de cada
-# entrada como <application_id>.png, asi que Icon= apunta al id de la bandeja.
-TRAY_DESKTOP_SRC="$BAUH_SRC/bauh/desktop/gekko-bauh-tray.desktop"
-TRAY_TEMPLATE_REL=""
-if [ -f "$TRAY_DESKTOP_SRC" ]; then
-  TRAY_TEMPLATE_REL="bauh/desktop/bauh-tray.desktop.template"
-  sed -e 's|^Exec=.*|Exec=@EXECUTABLE@|' \
-      -e "s|^Icon=.*|Icon=$TRAY_APP_ID|" \
-      "$TRAY_DESKTOP_SRC" > "$STAGE/$ROOT/$TRAY_TEMPLATE_REL"
-  if grep -q '@' "$STAGE/$ROOT/$TRAY_TEMPLATE_REL" && [ "$(grep -o '@' "$STAGE/$ROOT/$TRAY_TEMPLATE_REL" | wc -l)" != "2" ]; then
-    echo "error: la plantilla .desktop de la bandeja contiene tokens '@' no admitidos" >&2
-    exit 1
-  fi
-fi
+# Una sola entrada de menu. La bandeja (gekko-bauh-tray) ya no declara la suya:
+# con ella la cuadricula de aplicaciones mostraba dos «bauh Gekko Edition». El
+# ejecutable se sigue publicando en [project.scripts] y el motor retira, al
+# actualizar, la entrada org.thegekko.bauh.tray de los releases anteriores.
 
 # Icono PNG hicolor. El fork ya publica los PNG por tamano en pictures/icons,
 # asi que se copia el de 512 en vez de rasterizar un SVG (bauh ya no distribuye
@@ -180,7 +165,7 @@ ARCHIVE_SIZE="$(stat -c %s "$DIST_DIR/$ARCHIVE")"
 ARCHIVE_SHA256="$(sha256sum "$DIST_DIR/$ARCHIVE" | awk '{print $1}')"
 
 echo "==> Calculando payload"
-MANIFEST="$(python3 - "$STAGE" "$ROOT" "$DIST_DIR" "$ARCHIVE" "$TAG" "$TARGET" "$PRODUCT_ID" "$REPOSITORY" "$APP_ID" "$GLIBC_MINIMUM" "$VERSION" "$ARCHIVE_SIZE" "$ARCHIVE_SHA256" "$MANIFEST_NAME" "$TRAY_APP_ID" "$TRAY_TEMPLATE_REL" <<'PYEOF'
+MANIFEST="$(python3 - "$STAGE" "$ROOT" "$DIST_DIR" "$ARCHIVE" "$TAG" "$TARGET" "$PRODUCT_ID" "$REPOSITORY" "$APP_ID" "$GLIBC_MINIMUM" "$VERSION" "$ARCHIVE_SIZE" "$ARCHIVE_SHA256" "$MANIFEST_NAME" <<'PYEOF'
 import hashlib, json, os, stat, sys
 
 stage, root, dist_dir, archive = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
@@ -189,7 +174,6 @@ product_id, repository, app_id = sys.argv[7], sys.argv[8], sys.argv[9]
 glibc_min, version = sys.argv[10], sys.argv[11]
 archive_size, archive_sha256 = int(sys.argv[12]), sys.argv[13]
 manifest_name = sys.argv[14]
-tray_app_id, tray_template = sys.argv[15], sys.argv[16]
 
 # Coherencia version <-> etiqueta, la misma regla que installer.rs
 # (validate_manifest): 'v' + version, o 'v' + version con '+' -> '-'.
@@ -244,12 +228,6 @@ for script in sorted(scripts):
 
 # El lanzador principal es el que se llama como la distribucion.
 primary = distribution if distribution in scripts else sorted(scripts)[0]
-# La bandeja solo se declara si el checkout trae su .desktop y el proyecto
-# publica el ejecutable correspondiente; si no, se avisa y se omite.
-tray_entrypoint = primary + "-tray"
-declare_tray = bool(tray_template) and tray_entrypoint in scripts
-if tray_template and not declare_tray:
-    print("aviso: %s no esta en [project.scripts]; no se declara la entrada de bandeja" % tray_entrypoint, file=sys.stderr)
 
 payload = []
 for dirpath, dirnames, filenames in os.walk(tree):
@@ -324,22 +302,6 @@ manifest = {
         ]
     },
 }
-if declare_tray:
-    # Mismo PNG de origen: el motor lo instala como <tray_app_id>.png.
-    manifest["integrations"]["desktop_entries"].append({
-        "application_id": tray_app_id,
-        "template": tray_template,
-        "entrypoint": tray_entrypoint,
-        "icons": [
-            {
-                "source": "bauh/desktop/%s.png" % app_id,
-                "theme": "hicolor",
-                "size": 512,
-                "format": "png",
-            }
-        ],
-    })
-
 declared = {entry["path"] for entry in payload}
 missing = [e["path"] for e in entrypoints if e["path"] not in declared]
 if missing:
