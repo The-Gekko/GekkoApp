@@ -5,8 +5,8 @@
 # ==============================================================================
 # Punto de entrada principal: abre el Control Center de escritorio, desde el
 # que se instala y actualiza todo el entorno (Kito, Bauh Fork, Gekko ADB Studio,
-# el propio GekkoApp, Terminal Bonita, presets Hyprland/Niri, gaming y Chaotic
-# AUR). Tambien notifica las nuevas actualizaciones (campana).
+# el propio GekkoApp y Chaotic AUR). Tambien notifica las nuevas
+# actualizaciones (campana).
 #
 #   ./GekkoApp.sh            -> Control Center (GUI)
 #   ./GekkoApp.sh --gui      -> (equivalente al modo por defecto)

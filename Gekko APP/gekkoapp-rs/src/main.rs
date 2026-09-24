@@ -1,14 +1,12 @@
 #![allow(dead_code, clippy::print_literal)]
 
 use gekkoapp::core::flow::{
-    install_bauh, install_gaming, install_gekko_adb, install_gekkoapp, install_hyprland,
-    install_kito_environment, install_niri, install_zsh_starship, uninstall_bauh, uninstall_gaming,
-    uninstall_gekko_adb, uninstall_hyprland, uninstall_kito_environment, uninstall_niri,
-    uninstall_zsh_starship,
+    install_bauh, install_gekko_adb, install_gekkoapp, install_kito_environment, uninstall_bauh,
+    uninstall_gekko_adb, uninstall_kito_environment,
 };
 use gekkoapp::core::pacman::install_chaotic_aur;
 
-use gekkoapp::core::reporter::{BOLD, DIM, FG_CYAN, FG_GREEN, FG_MAGENTA, FG_RED, FG_WHITE, RESET};
+use gekkoapp::core::reporter::{BOLD, DIM, FG_CYAN, FG_MAGENTA, FG_RED, FG_WHITE, RESET};
 use gekkoapp::core::{CliReporter, Reporter};
 use gekkoapp::environment::SystemEnvironment;
 use std::io::{self, BufRead, Write};
@@ -39,9 +37,8 @@ fn print_usage() {
     println!("Uso: gekkoapp [--help | --version]");
     println!();
     println!("Sin argumentos abre el menu interactivo (instalar, actualizar y");
-    println!("desinstalar Kito, Bauh Fork, Gekko ADB Studio, Terminal Bonita,");
-    println!("Hyprland, Niri, Gaming y Chaotic AUR). Con la entrada cerrada (EOF)");
-    println!("el menu termina en vez de repetirse.");
+    println!("desinstalar Kito, Bauh Fork y Gekko ADB Studio, y agregar Chaotic AUR).");
+    println!("Con la entrada cerrada (EOF) el menu termina en vez de repetirse.");
     println!();
     println!("  -h, --help      Muestra esta ayuda y sale.");
     println!("  -V, --version   Muestra la version y sale.");
@@ -173,54 +170,9 @@ fn print_menu(env: &SystemEnvironment) {
         });
     }
 
-    if is_arch || is_solus {
+    if is_arch {
         items.push(MenuItem {
             key: "1",
-            icon: "🐚",
-            label: "Terminal Bonita           (ZSH + Starship + Plugins)",
-            badge: None,
-        });
-    }
-
-    if is_arch {
-        items.push(MenuItem {
-            key: "2",
-            icon: "🪟",
-            label: "Entorno Hyprland          (Herramientas + Deps)",
-            badge: None,
-        });
-        items.push(MenuItem {
-            key: "3",
-            icon: "🪟",
-            label: "Entorno Niri              (Herramientas + Deps)",
-            badge: None,
-        });
-    }
-
-    if is_arch || is_solus {
-        items.push(MenuItem {
-            key: "4",
-            icon: "🎮",
-            label: "Gaming Setup",
-            badge: Some(("NVIDIA", FG_GREEN)),
-        });
-        items.push(MenuItem {
-            key: "5",
-            icon: "🎮",
-            label: "Gaming Setup",
-            badge: Some(("INTEL", FG_CYAN)),
-        });
-        items.push(MenuItem {
-            key: "6",
-            icon: "🎮",
-            label: "Gaming Setup",
-            badge: Some(("AMD", FG_RED)),
-        });
-    }
-
-    if is_arch {
-        items.push(MenuItem {
-            key: "7",
             icon: "📦",
             label: "Agregar repositorios      Chaotic AUR",
             badge: None,
@@ -229,13 +181,13 @@ fn print_menu(env: &SystemEnvironment) {
 
     if is_arch || is_solus {
         items.push(MenuItem {
-            key: "8",
+            key: "2",
             icon: "🛍️",
             label: "Tienda Bauh               (Parcheado + AUR)",
             badge: None,
         });
         items.push(MenuItem {
-            key: "b",
+            key: "3",
             icon: "📱",
             label: "Gekko ADB Studio         (Control ADB GTK)",
             badge: Some(("NUEVO", FG_MAGENTA)),
@@ -290,10 +242,7 @@ fn print_menu(env: &SystemEnvironment) {
     let _ = io::stdout().flush();
 }
 
-fn run_uninstall_menu(reporter: &dyn Reporter, env: &SystemEnvironment) {
-    // Los presets Hyprland y Niri solo existen en Arch: el submenu los oculta
-    // igual que hace `print_menu`, para no ofrecer una accion imposible.
-    let is_arch = env.distro_id == "arch" || env.distro_like.iter().any(|id| id == "arch");
+fn run_uninstall_menu(reporter: &dyn Reporter) {
     println!();
     println!(
         "  {}{}--- MENÚ DE DESINSTALACIÓN ---{}",
@@ -302,12 +251,6 @@ fn run_uninstall_menu(reporter: &dyn Reporter, env: &SystemEnvironment) {
     println!("  {}[1]{} Desinstalar Tienda Bauh Fork", FG_CYAN, RESET);
     println!("  {}[2]{} Desinstalar Gekko ADB Studio", FG_CYAN, RESET);
     println!("  {}[3]{} Desinstalar Entorno Kito", FG_CYAN, RESET);
-    println!("  {}[4]{} Desinstalar Terminal Bonita", FG_CYAN, RESET);
-    if is_arch {
-        println!("  {}[5]{} Desinstalar Preset Hyprland", FG_CYAN, RESET);
-        println!("  {}[6]{} Desinstalar Preset Niri", FG_CYAN, RESET);
-    }
-    println!("  {}[7]{} Desinstalar Gaming Setup", FG_CYAN, RESET);
     println!("  {}[0]{} Cancelar", FG_RED, RESET);
     println!();
     print!(
@@ -327,18 +270,6 @@ fn run_uninstall_menu(reporter: &dyn Reporter, env: &SystemEnvironment) {
         }
         "3" => {
             let _ = uninstall_kito_environment(reporter);
-        }
-        "4" => {
-            uninstall_zsh_starship(reporter);
-        }
-        "5" if is_arch => {
-            uninstall_hyprland(reporter);
-        }
-        "6" if is_arch => {
-            uninstall_niri(reporter);
-        }
-        "7" => {
-            uninstall_gaming(reporter);
         }
         _ => {
             reporter.info("Desinstalación cancelada.");
@@ -387,41 +318,18 @@ fn main() {
                 press_enter_to_continue(&reporter);
             }
             "1" => {
-                install_zsh_starship(&reporter);
-                press_enter_to_continue(&reporter);
-            }
-            "2" => {
-                install_hyprland(&reporter);
-                press_enter_to_continue(&reporter);
-            }
-            "3" => {
-                install_niri(&reporter);
-                press_enter_to_continue(&reporter);
-            }
-            "4" => {
-                install_gaming(&reporter, "nvidia");
-                press_enter_to_continue(&reporter);
-            }
-            "5" => {
-                install_gaming(&reporter, "intel");
-                press_enter_to_continue(&reporter);
-            }
-            "6" => {
-                install_gaming(&reporter, "amd");
-                press_enter_to_continue(&reporter);
-            }
-            "7" => {
                 install_chaotic_aur(&reporter);
                 press_enter_to_continue(&reporter);
             }
-            "8" => {
+            "2" => {
                 match install_bauh(&reporter, &environment, true) {
                     Ok(()) => {}
                     Err(error) => reporter.err(&format!("Bauh Fork no se instalo: {error}")),
                 }
                 press_enter_to_continue(&reporter);
             }
-            "b" | "B" => {
+            // «b» era la tecla de Gekko ADB antes de renumerar el menu.
+            "3" | "b" | "B" => {
                 match install_gekko_adb(&reporter) {
                     Ok(()) => {}
                     Err(error) => reporter.err(&format!("Gekko ADB Studio no se instalo: {error}")),
@@ -436,7 +344,7 @@ fn main() {
                 press_enter_to_continue(&reporter);
             }
             "d" | "D" => {
-                run_uninstall_menu(&reporter, &environment);
+                run_uninstall_menu(&reporter);
                 press_enter_to_continue(&reporter);
             }
             "0" => {

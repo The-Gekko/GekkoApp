@@ -654,7 +654,7 @@ pub(crate) fn http_agent() -> ureq::Agent {
         .timeout_global(Some(Duration::from_secs(180)))
         .timeout_connect(Some(Duration::from_secs(10)))
         .timeout_recv_body(Some(Duration::from_secs(120)))
-        .user_agent("GekkoApp/1.1")
+        .user_agent(concat!("GekkoApp/", env!("CARGO_PKG_VERSION")))
         .build()
         .into()
 }

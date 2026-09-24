@@ -1,8 +1,8 @@
 //! Interfaz de escritorio Tauri v2 (Control Center).
 //!
 //! Expone el catalogo y la instalacion de componentes (Kito, Bauh Fork, Gekko
-//! ADB Studio, GekkoApp) y de los modulos del post-install (Terminal, Hyprland,
-//! Niri, Gaming, Chaotic AUR) al frontend `ui/` a traves de comandos. El
+//! ADB Studio, GekkoApp) y el alta de Chaotic AUR al frontend `ui/` a traves de
+//! comandos. El
 //! progreso de los flujos se emite como eventos `install://event` mediante un
 //! [`GuiReporter`]. El comando `check_updates` alimenta la campana de
 //! actualizaciones del Control Center.
@@ -574,61 +574,6 @@ where
 }
 
 #[tauri::command]
-async fn install_terminal(app: AppHandle, password: Option<String>) -> Result<(), String> {
-    run_gui_install(app, password, |reporter| {
-        if crate::core::flow::install_zsh_starship(reporter) {
-            Ok(())
-        } else {
-            Err("La instalacion de Terminal Bonita fallo.".to_string())
-        }
-    })
-    .await
-}
-
-#[tauri::command]
-async fn install_hyprland(app: AppHandle, password: Option<String>) -> Result<(), String> {
-    run_gui_install(app, password, |reporter| {
-        if crate::core::flow::install_hyprland(reporter) {
-            Ok(())
-        } else {
-            Err("La instalacion del entorno Hyprland fallo.".to_string())
-        }
-    })
-    .await
-}
-
-#[tauri::command]
-async fn install_niri(app: AppHandle, password: Option<String>) -> Result<(), String> {
-    run_gui_install(app, password, |reporter| {
-        if crate::core::flow::install_niri(reporter) {
-            Ok(())
-        } else {
-            Err("La instalacion del entorno Niri fallo.".to_string())
-        }
-    })
-    .await
-}
-
-#[tauri::command]
-async fn install_gaming_setup(
-    app: AppHandle,
-    gpu: String,
-    password: Option<String>,
-) -> Result<(), String> {
-    if !matches!(gpu.as_str(), "nvidia" | "intel" | "amd") {
-        return Err(format!("GPU no soportada: {gpu}"));
-    }
-    run_gui_install(app, password, move |reporter| {
-        if crate::core::flow::install_gaming(reporter, &gpu) {
-            Ok(())
-        } else {
-            Err("La instalacion de Gaming fallo.".to_string())
-        }
-    })
-    .await
-}
-
-#[tauri::command]
 async fn install_chaotic_aur(app: AppHandle, password: Option<String>) -> Result<(), String> {
     run_gui_install(app, password, |reporter| {
         if crate::core::pacman::install_chaotic_aur(reporter) {
@@ -686,56 +631,6 @@ async fn uninstall_gekko_adb(app: AppHandle) -> Result<(), String> {
         .map_err(|error| format!("Error al desinstalar Gekko ADB Studio: {error}"))?
 }
 
-#[tauri::command]
-async fn uninstall_terminal(app: AppHandle) -> Result<(), String> {
-    let reporter = GuiReporter { app };
-    tauri::async_runtime::spawn_blocking(move || {
-        if crate::core::flow::uninstall_zsh_starship(&reporter) {
-            Ok(())
-        } else {
-            Err("Error al desinstalar Terminal Bonita.".to_string())
-        }
-    })
-    .await
-    .map_err(|error| format!("Error en la tarea: {error}"))?
-}
-
-#[tauri::command]
-async fn uninstall_hyprland(app: AppHandle, password: Option<String>) -> Result<(), String> {
-    run_gui_install(app, password, |reporter| {
-        if crate::core::flow::uninstall_hyprland(reporter) {
-            Ok(())
-        } else {
-            Err("Error al desinstalar preset Hyprland.".to_string())
-        }
-    })
-    .await
-}
-
-#[tauri::command]
-async fn uninstall_niri(app: AppHandle, password: Option<String>) -> Result<(), String> {
-    run_gui_install(app, password, |reporter| {
-        if crate::core::flow::uninstall_niri(reporter) {
-            Ok(())
-        } else {
-            Err("Error al desinstalar preset Niri.".to_string())
-        }
-    })
-    .await
-}
-
-#[tauri::command]
-async fn uninstall_gaming_setup(app: AppHandle, password: Option<String>) -> Result<(), String> {
-    run_gui_install(app, password, |reporter| {
-        if crate::core::flow::uninstall_gaming(reporter) {
-            Ok(())
-        } else {
-            Err("Error al desinstalar Gaming Setup.".to_string())
-        }
-    })
-    .await
-}
-
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
@@ -754,18 +649,10 @@ pub fn run() {
             install_bauh,
             install_gekko_adb,
             install_gekkoapp,
-            install_terminal,
-            install_hyprland,
-            install_niri,
-            install_gaming_setup,
             install_chaotic_aur,
             uninstall_kito,
             uninstall_bauh,
             uninstall_gekko_adb,
-            uninstall_terminal,
-            uninstall_hyprland,
-            uninstall_niri,
-            uninstall_gaming_setup,
             theme_state
         ])
         .run(tauri::generate_context!())

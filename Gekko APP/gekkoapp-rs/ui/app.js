@@ -166,8 +166,6 @@ function render() {
   $("env").textContent = envText;
 
   if (env.distroId === "solus" || env.packageManager === "eopkg") {
-    $("hyprland-card")?.classList.add("hidden");
-    $("niri-card")?.classList.add("hidden");
     $("chaotic-card")?.classList.add("hidden");
   }
 
@@ -240,17 +238,7 @@ function refreshButtons() {
   $("kito-install").disabled = $("kito-pass").value.trim() === "";
   $("bauh-install").disabled = $("bauh-pass").value.trim() === "";
   $("gekko-adb-install").disabled = $("gekko-adb-pass").value.trim() === "";
-  $("terminal-install").disabled = $("terminal-pass").value.trim() === "";
-  $("hyprland-install").disabled = $("hyprland-pass").value.trim() === "";
-  $("niri-install").disabled = $("niri-pass").value.trim() === "";
-  $("gaming-install").disabled = $("gaming-pass").value.trim() === "";
   $("chaotic-install").disabled = $("chaotic-pass").value.trim() === "";
-  // Estos desinstaladores llaman a pacman/eopkg: necesitan la contrasena igual
-  // que su instalador. Sin gatearlos fallaban siempre con "Introduce tu
-  // contrasena de sudo en la interfaz".
-  $("hyprland-uninstall").disabled = $("hyprland-pass").value.trim() === "";
-  $("niri-uninstall").disabled = $("niri-pass").value.trim() === "";
-  $("gaming-uninstall").disabled = $("gaming-pass").value.trim() === "";
 }
 
 // ── Campana de actualizaciones ───────────────────────────────────────────────
@@ -458,10 +446,6 @@ async function init() {
   $("kito-pass").addEventListener("input", refreshButtons);
   $("bauh-pass").addEventListener("input", refreshButtons);
   $("gekko-adb-pass").addEventListener("input", refreshButtons);
-  $("terminal-pass").addEventListener("input", refreshButtons);
-  $("hyprland-pass").addEventListener("input", refreshButtons);
-  $("niri-pass").addEventListener("input", refreshButtons);
-  $("gaming-pass").addEventListener("input", refreshButtons);
   $("chaotic-pass").addEventListener("input", refreshButtons);
 
   listen("theme://changed", (event) => applyPalette(event.payload));
@@ -576,64 +560,6 @@ async function init() {
     );
   });
 
-  $("terminal-install").addEventListener("click", () => {
-    guardedRun(
-      {
-        title: "Instalar Terminal Bonita",
-        body:
-          "Se instalaran ZSH, Starship, Kitty y sus plugins, y se sobrescribiran tres archivos tuyos: " +
-          "~/.zshrc, ~/.config/starship.toml y ~/.config/fastfetch/config.jsonc. " +
-          "Ademas se cambiara tu SHELL DE LOGIN a /bin/zsh usando sudo.",
-        detail:
-          "De cada archivo se guarda antes una copia con marca de tiempo junto al original. " +
-          INSTALL_NOTE,
-        confirmLabel: "Instalar",
-      },
-      "install_terminal",
-      { password: $("terminal-pass").value }
-    );
-  });
-
-  $("hyprland-install").addEventListener("click", () => {
-    guardedRun(
-      {
-        title: "Instalar el preset Hyprland",
-        body: "Se instalaran las herramientas del preset y se DESINSTALARAN dolphin, polkit-kde-agent y wofi si los tienes.",
-        detail: INSTALL_NOTE,
-        confirmLabel: "Instalar",
-      },
-      "install_hyprland",
-      { password: $("hyprland-pass").value }
-    );
-  });
-
-  $("niri-install").addEventListener("click", () => {
-    guardedRun(
-      {
-        title: "Instalar el preset Niri",
-        body: "Se instalaran las herramientas del preset y se DESINSTALARAN mako, swaybg, swayidle, swaylock y waybar si los tienes.",
-        detail: INSTALL_NOTE,
-        confirmLabel: "Instalar",
-      },
-      "install_niri",
-      { password: $("niri-pass").value }
-    );
-  });
-
-  $("gaming-install").addEventListener("click", () => {
-    const gpu = $("gaming-gpu").value;
-    guardedRun(
-      {
-        title: "Instalar el Gaming Setup",
-        body: `Se instalara el driver Vulkan de ${gpu.toUpperCase()}, Steam y las utilidades gaming.`,
-        detail: INSTALL_NOTE,
-        confirmLabel: "Instalar",
-      },
-      "install_gaming_setup",
-      { gpu, password: $("gaming-pass").value }
-    );
-  });
-
   $("chaotic-install").addEventListener("click", () => {
     guardedRun(
       {
@@ -702,63 +628,6 @@ async function init() {
       {}
     );
   });
-
-  $("terminal-uninstall")?.addEventListener("click", () => {
-    guardedRun(
-      {
-        title: "Desinstalar Terminal Bonita",
-        body: "Se ELIMINARA tu archivo ~/.zshrc.",
-        detail: "Antes se guarda una copia con marca de tiempo junto al original. Los paquetes (zsh, starship, kitty...) se conservan.",
-        confirmLabel: "Eliminar ~/.zshrc",
-        danger: true,
-      },
-      "uninstall_terminal",
-      {}
-    );
-  });
-
-  $("hyprland-uninstall")?.addEventListener("click", () => {
-    guardedRun(
-      {
-        title: "Desinstalar el preset Hyprland",
-        body: "Se desinstalaran las herramientas propias del preset (nwg-look, xwayland-satellite).",
-        detail: "Las dependencias de escritorio compartidas se conservan. Veras el plan exacto en el Progreso.",
-        confirmLabel: "Desinstalar",
-        danger: true,
-      },
-      "uninstall_hyprland",
-      { password: $("hyprland-pass").value }
-    );
-  });
-
-  $("niri-uninstall")?.addEventListener("click", () => {
-    guardedRun(
-      {
-        title: "Desinstalar el preset Niri",
-        body: "Se desinstalaran las herramientas propias del preset (nwg-look, xwayland-satellite, dconf-editor).",
-        detail: "El compositor niri y las dependencias compartidas se conservan.",
-        confirmLabel: "Desinstalar",
-        danger: true,
-      },
-      "uninstall_niri",
-      { password: $("niri-pass").value }
-    );
-  });
-
-  $("gaming-uninstall")?.addEventListener("click", () => {
-    guardedRun(
-      {
-        title: "Desinstalar el Gaming Setup",
-        body: "Se desinstalaran gamemode, mangohud y los gestores de Proton.",
-        detail: "Steam, Discord y Flatpak se conservan.",
-        confirmLabel: "Desinstalar",
-        danger: true,
-      },
-      "uninstall_gaming_setup",
-      { password: $("gaming-pass").value }
-    );
-  });
-
 
   $("bell-toggle").addEventListener("click", (event) => {
     event.stopPropagation();

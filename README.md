@@ -4,28 +4,27 @@
   <em>Imagen hecha con IA · Gemini en su modelo Nano Banana</em>
 </p>
 
-# 🚀 GekkoApp: Linux Personalizer & Gaming Setup
+# 🚀 GekkoApp: Control Center de The-Gekko
 
 **GekkoApp** es un **Control Center de escritorio** (Rust + Tauri v2) para Arch Linux, Garuda y Solus. Con un clic instalas, actualizas, desinstalas y mantienes todo tu entorno sin tocar la terminal.
 
-> Versión en desarrollo: **1.2.0** (pendiente de publicar). Último release publicado: **v1.1.0**.
+> Versión: **1.3.0**. Los releases están en [Releases](https://github.com/The-Gekko/GekkoApp/releases); desde la app se actualiza con el botón **Actualizar GekkoApp**.
 
 ## ✨ Lo que trae
 
 - 🖥️ **Control Center (GUI)** — desde aquí lo controlas todo: instalar, actualizar, desinstalar componentes y ver novedades con la campana 🔔. Cada acción muestra antes un diálogo de confirmación con lo que va a cambiar y se puede cancelar; los de Bauh y Gekko ADB detallan paquetes y rutas.
-- 🐧 **Soporte Multi-Distro (Arch, Garuda y Solus)** — detecta `pacman` y `eopkg` automáticamente y adapta los paquetes, plugins y vistas.
-- 🗑️ **Desinstalación limpia e idempotente** — desinstala Kito, Bauh, Gekko ADB, Terminal Bonita, Presets y Gaming desde la GUI o el CLI. Sin residuos: se borra lo que GekkoApp instaló y se conservan tus datos (la configuración de Bauh (`~/.config/bauh` con el v0.10.7 actual; `~/.config/gekko-bauh` a partir de v0.10.8-gekko.1), `~/.config/gekko-adb`, `~/.local/state/gekko-adb/logs`); `~/.zshrc` se sustituye por su copia de seguridad `~/.zshrc.backup_<marca de tiempo>`.
+- 🐧 **Soporte Multi-Distro (Arch, Garuda y Solus)** — detecta `pacman` y `eopkg` automáticamente y adapta los paquetes y las vistas.
+- 🗑️ **Desinstalación limpia e idempotente** — desinstala Kito, Bauh y Gekko ADB desde la GUI o el CLI. Sin residuos: se borra lo que GekkoApp instaló y se conservan tus datos (`~/.config/gekko-bauh`, `~/.config/gekko-adb`, `~/.local/state/gekko-adb/logs`).
 - 🦊 **Entorno Kito** — KiUI, Kitsune Compositor y módulos (Kitowall, Kilivepaper, KiSDDM) desde releases verificados (manifiesto + SHA-256).
 - 🛍️ **bauh Gekko Edition (Bauh Fork)** — instalación aislada con `pipx` desde un release verificado por SHA-256.
 - 📱 **Gekko ADB Studio** — suite GTK de control ADB (scrcpy, shell, debloat y presets), instalada desde el código fuente del repositorio.
 - 🔄 **Auto-update de GekkoApp** — la app se actualiza a sí misma desde un release verificado (manifiesto + SHA-256), sin sudo.
-- 💻 **Terminal Bonita** — ZSH + Starship + plugins por **𝓲𝓑𝓵𝓾𝓮𝓜𝓸𝓸𝓷**.
-- 🪟 **Presets Hyprland y Niri** — herramientas y dependencias listas (Arch Linux).
-- 🎮 **Gaming Setup** — instala el driver Vulkan de tu GPU (NVIDIA, Intel o AMD), Steam y utilidades; los extras que no estén en tus repositorios (ProtonPlus, Spotify, DXVK) se omiten con aviso en vez de abortar.
 - 📦 **Chaotic AUR** — repositorios optimizados en un clic (Arch Linux).
 - 🎨 **Tema adaptativo** — sigue la paleta de matugen en vivo (Material You).
 
 Los releases de **GekkoApp, Kito y Bauh** se verifican (HTTPS + tamaño + SHA-256 contra su manifiesto) antes de tocar tu sistema. **Gekko ADB Studio es la excepción**: aún no publica releases, así que se clona desde `main` por HTTPS. **Nada de `curl | sh` de terceros.**
+
+> **Retirado en 1.3.0**: Terminal Bonita (ZSH + Starship), los presets Hyprland y Niri y el Gaming Setup ya no forman parte de GekkoApp. Si los instalaste con una versión anterior, lo que instalaron se queda en tu sistema; si ya no lo quieres, quítalo con tu gestor de paquetes. Como referencia, sus desinstaladores retiraban: Hyprland `nwg-look xwayland-satellite`; Niri esos dos y `dconf-editor`; Gaming `gamemode mangohud` (y `protonplus` en Arch), conservando Steam, Discord y Flatpak. Terminal Bonita guardaba tu `~/.zshrc` anterior como `~/.zshrc.backup_<marca de tiempo>`.
 
 ## 🧩 Un solo instalador, tres proyectos
 
@@ -42,9 +41,9 @@ GekkoApp es el punto de entrada de tres proyectos de The-Gekko. Cada uno se pued
 Notas honestas:
 
 - **Gekko ADB Studio no tiene releases verificados (manifiesto + SHA-256)**: GekkoApp clona HEAD de `main` por HTTPS y no hay manifiesto ni SHA-256 que verificar. El diálogo de instalación lo dice tal cual.
-- **Bauh hoy instala v0.10.7** (último release publicado; se instala como distribución `bauh`, con lanzadores `bauh`, `bauh-tray`, `bauh-cli`). A partir de **v0.10.8-gekko.1** (versión `0.10.8+gekko.1`, pendiente de publicar) se instalará como `gekko-bauh`, con los ejecutables `gekko-bauh`, `gekko-bauh-tray` y `gekko-bauh-cli` y dos entradas de menú (`org.thegekko.bauh` y `org.thegekko.bauh.tray`); al actualizar, GekkoApp retira antes el entorno pipx anterior para no dejar huérfanos. Ese release solo lo acepta GekkoApp 1.2.0 o posterior: GekkoApp 1.1.0 rechaza las etiquetas con guion, así que hay que publicar GekkoApp 1.2.0 antes que v0.10.8-gekko.1 (o actualizar GekkoApp primero).
+- **Bauh** se instala como distribución `gekko-bauh` (desde `v0.10.8-gekko.1`), con los ejecutables `gekko-bauh`, `gekko-bauh-tray` y `gekko-bauh-cli` y **una sola entrada de menú** (`org.thegekko.bauh`). Hasta `v0.10.8-gekko.1` el release declaraba además la de la bandeja (`org.thegekko.bauh.tray`); al actualizar, GekkoApp retira esa entrada y el entorno pipx anterior para no dejar huérfanos. Las etiquetas con guion (`vX.Y.Z-gekko.N`) solo las acepta GekkoApp 1.2.0 o posterior.
 - El repositorio antiguo `The-Gekko/Bauh-Fork-The-Gekko` solo se conserva como compatibilidad: los manifiestos ya publicados llevan ese nombre y GekkoApp los sigue aceptando.
-- **Desinstalar desde GekkoApp** borra exactamente los archivos que creó en tu HOME; los paquetes del sistema que instaló con pacman/eopkg (dependencias de Gekko ADB, python-pipx/pipx) no se desinstalan. Gekko ADB: `~/.local/bin/gekko-adb`, `~/.local/share/applications/com.gekko.adb.desktop` (+ los legacy `GekkoADB.desktop` y `org.thegekko.gekko_adb.desktop`), `~/.local/share/metainfo/com.gekko.adb.metainfo.xml`, `~/.local/share/icons/hicolor/512x512/apps/gekko-adb.png`, `~/.local/share/gekko-adb` (app, `.env`, `app.bak.*`) y el clon `~/.cache/gekkoapp/gekko-adb`; conserva `~/.config/gekko-adb` y `~/.local/state/gekko-adb/logs`. Bauh: `pipx uninstall` del entorno registrado, los `.desktop` e iconos registrados (`org.thegekko.bauh` y, desde v0.10.8-gekko.1, `org.thegekko.bauh.tray`) y la copia del release; conserva la configuración del usuario (`~/.config/bauh` con v0.10.7; `~/.config/gekko-bauh` desde v0.10.8-gekko.1).
+- **Desinstalar desde GekkoApp** borra exactamente los archivos que creó en tu HOME; los paquetes del sistema que instaló con pacman/eopkg (dependencias de Gekko ADB, python-pipx/pipx) no se desinstalan. Gekko ADB: `~/.local/bin/gekko-adb`, `~/.local/share/applications/com.gekko.adb.desktop` (+ los legacy `GekkoADB.desktop` y `org.thegekko.gekko_adb.desktop`), `~/.local/share/metainfo/com.gekko.adb.metainfo.xml`, `~/.local/share/icons/hicolor/512x512/apps/gekko-adb.png`, `~/.local/share/gekko-adb` (app, `.env`, `app.bak.*`) y el clon `~/.cache/gekkoapp/gekko-adb`; conserva `~/.config/gekko-adb` y `~/.local/state/gekko-adb/logs`. Bauh: `pipx uninstall` del entorno registrado, los `.desktop` e iconos registrados (`org.thegekko.bauh`, y `org.thegekko.bauh.tray` si lo dejó un release anterior) y la copia del release; conserva la configuración del usuario (`~/.config/gekko-bauh`).
 
 ## 📦 Instalación y Desinstalación
 
@@ -53,7 +52,7 @@ Hay **exactamente dos formas** de instalar GekkoApp: **por `curl`** (opción 1, 
 ### Requisitos
 
 - Arch Linux, Garuda o Solus (o derivadas con `ID_LIKE=arch`/`solus`), `x86_64` y sesión con **systemd de usuario**.
-- **Opción 1 (curl):** `curl`, `tar` (con zstd), `python3` y `getconf`. Además, **glibc** igual o superior a la mínima que declara el manifiesto del release (`platform.libc.minimum`): el instalador la compara con `getconf GNU_LIBC_VERSION` y aborta con un mensaje claro si el sistema es más antiguo. Esa mínima no se fija a mano: `scripts/build-release-bundle.sh` la deduce de los símbolos versionados de los binarios (`objdump -T` → mayor `GLIBC_x.y`) y la escribe en el manifiesto del release; sin `objdump` el empaquetado aborta en vez de adivinarla. Con la toolchain actual los binarios exigen **GLIBC 2.39**. Aviso: el release v1.1.0 publicado declara 2.34 por un fallo del empaquetado ya corregido; si tu glibc es 2.34–2.38 el instalador no te avisará y el binario no arrancará. El 1.2.0 declara la mínima real (2.39).
+- **Opción 1 (curl):** `curl`, `tar` (con zstd), `python3` y `getconf`. Además, **glibc** igual o superior a la mínima que declara el manifiesto del release (`platform.libc.minimum`): el instalador la compara con `getconf GNU_LIBC_VERSION` y aborta con un mensaje claro si el sistema es más antiguo. Esa mínima no se fija a mano: `scripts/build-release-bundle.sh` la deduce de los símbolos versionados de los binarios (`objdump -T` → mayor `GLIBC_x.y`) y la escribe en el manifiesto del release; sin `objdump` el empaquetado aborta en vez de adivinarla. Con la toolchain actual los binarios exigen **GLIBC 2.39**. Aviso: el release v1.1.0 declara 2.34 por un fallo del empaquetado ya corregido; si tu glibc es 2.34–2.38 el instalador no te avisará y el binario no arrancará. Desde la 1.2.0 cada release declara la mínima real.
 - **Opción 2 (clonar):** `git` y `cargo`/`rustc` ([rustup](https://rustup.rs)), más las dependencias de compilación de Tauri v2 en Linux; en Arch son `base-devel`, `webkit2gtk-4.1`, `gtk3` y `libsoup3`. Aquí no hay comprobación de glibc: los binarios los compila tu propia máquina.
 
 ### Opción 1 — Por `curl` (release verificado, sin compilar)
@@ -133,8 +132,8 @@ Scripts de release (desde la raíz del repositorio):
 
 | Colaborador | Rol |
 | :---------- | :--- |
-| **The-Gekko** | Arquitectura en Rust, lógica de sistema y optimización gaming. |
-| **𝓲𝓑𝓵𝓾𝓮𝓜𝓸𝓸𝓷** | Especialista en shell: experiencia Zsh e integración de plugins. |
+| **The-Gekko** | Arquitectura en Rust y lógica de sistema. |
+| **𝓲𝓑𝓵𝓾𝓮𝓜𝓸𝓸𝓷** | Especialista en shell: creó Terminal Bonita (Zsh + plugins), incluida hasta la versión 1.2.0. |
 | **KitotsuMolina** | Ecosistema Kito (KiUI, Kitsune, Kitowall, Kilivepaper, KiSDDM). |
 
 ## ☕ Apoya el proyecto

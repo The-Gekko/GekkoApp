@@ -237,8 +237,7 @@ body {
   margin-top: 14px;
 }
 
-.actions input[type="password"],
-.actions select.gpu-select {
+.actions input[type="password"] {
   flex: 1 1 100%;
   width: 100%;
   background: var(--panel-2);
@@ -249,15 +248,9 @@ body {
   font-family: inherit;
 }
 
-.actions input[type="password"]:focus,
-.actions select.gpu-select:focus {
+.actions input[type="password"]:focus {
   outline: none;
   border-color: var(--accent);
-}
-
-.gpu-select {
-  font-weight: 700;
-  cursor: pointer;
 }
 
 .theme-swatches {

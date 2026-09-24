@@ -16,7 +16,7 @@
 # Seguridad: solo HTTPS, verifica el SHA-256 del artefacto contra su manifiesto
 # (contrato kitotsu.release-artifact) antes de tocar el sistema, y comprueba
 # que la glibc del host alcanza la minima que declara el manifiesto. No instala
-# ningun componente (Kito, Bauh, Gekko ADB, terminal, gaming, Chaotic AUR):
+# ningun componente (Kito, Bauh, Gekko ADB, Chaotic AUR):
 # eso se hace desde dentro del Control Center. Idempotente: si la version ya
 # esta instalada no se vuelve a descargar, solo se reactiva.
 
