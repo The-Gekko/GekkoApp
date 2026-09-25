@@ -982,7 +982,29 @@ fn print_detected_environment(environment: &SystemEnvironment) {
         DIM, RESET, environment.architecture
     );
     println!("  {}Sesion:{} {}", DIM, RESET, environment.session);
-    println!("  {}Escritorio:{} {}", DIM, RESET, environment.desktop);
+    println!("  {}Compositor:{} {}", DIM, RESET, environment.desktop);
+    println!(
+        "  {}SDDM instalado:{} {}",
+        DIM,
+        RESET,
+        if environment.sddm_installed {
+            "si"
+        } else {
+            "no"
+        }
+    );
+    println!(
+        "  {}Shell instalado (IPC sin verificar):{} {}",
+        DIM, RESET, environment.shell
+    );
+    println!(
+        "  {}Gestor de login configurado:{} {}",
+        DIM, RESET, environment.display_manager
+    );
+    println!(
+        "  {}Greeter configurado:{} {}",
+        DIM, RESET, environment.greeter
+    );
     println!(
         "  {}Servicios:{} {}",
         DIM, RESET, environment.service_manager
@@ -1040,16 +1062,22 @@ fn confirm_or_override_environment(
     }
 }
 
-fn select_kito_modules() -> Option<ModuleSelection> {
+fn select_kito_modules(environment: &SystemEnvironment) -> Option<ModuleSelection> {
     let mut selection = ModuleSelection::default();
     loop {
         clear_screen();
         print_header("MODULOS DEL ENTORNO KITO");
         println!("  {}Obligatorios{}", BOLD, RESET);
         println!("  {}[✓]{} KiUI", FG_GREEN, RESET);
-        println!("  {}[✓]{} Kitsune Compositor", FG_GREEN, RESET);
+        println!(
+            "  {}[✓]{} Kitsune Compositor (dependencia de KiUI)",
+            FG_GREEN, RESET
+        );
         println!();
-        println!("  {}Selecciona uno o varios modulos{}", BOLD, RESET);
+        println!(
+            "  {}Modulos opcionales (puedes continuar sin seleccionar ninguno){}",
+            BOLD, RESET
+        );
         println!(
             "  [{}] [1] Kitowall       Wallpapers estaticos",
             if selection.kitowall { "x" } else { " " }
@@ -1059,8 +1087,13 @@ fn select_kito_modules() -> Option<ModuleSelection> {
             if selection.kilivepaper { "x" } else { " " }
         );
         println!(
-            "  [{}] [3] KiSDDM          Pantalla de inicio SDDM",
-            if selection.kisddm { "x" } else { " " }
+            "  [{}] [3] KiSDDM          Pantalla de inicio SDDM{}",
+            if selection.kisddm { "x" } else { " " },
+            if environment.supports_kisddm() {
+                ""
+            } else {
+                " [NO APLICABLE: requiere SDDM instalado]"
+            }
         );
         println!(
             "  {}[--] [4] Kitsune        Espectro de audio  [PROXIMAMENTE]{}",
@@ -1074,16 +1107,16 @@ fn select_kito_modules() -> Option<ModuleSelection> {
         match read_line().as_str() {
             "1" => selection.kitowall = !selection.kitowall,
             "2" => selection.kilivepaper = !selection.kilivepaper,
-            "3" => selection.kisddm = !selection.kisddm,
+            "3" if environment.supports_kisddm() => selection.kisddm = !selection.kisddm,
+            "3" => {
+                print_warn("KiSDDM requiere SDDM instalado; GekkoApp no instala ni activa SDDM.");
+                thread::sleep(Duration::from_secs(2));
+            }
             "4" => {
                 print_warn("Kitsune estara disponible proximamente.");
                 thread::sleep(Duration::from_secs(1));
             }
-            "5" if selection.has_product() => return Some(selection),
-            "5" => {
-                print_warn("Selecciona al menos Kitowall, Kilivepaper o KiSDDM.");
-                thread::sleep(Duration::from_secs(2));
-            }
+            "5" => return Some(selection),
             "0" => return None,
             _ => {
                 print_warn("Opcion no valida.");
@@ -1110,7 +1143,7 @@ fn install_kito_environment() {
         print_err("No existe un target de release para esta arquitectura.");
         return;
     };
-    let Some(selection) = select_kito_modules() else {
+    let Some(selection) = select_kito_modules(&environment) else {
         return;
     };
     let plan = selection.plan();

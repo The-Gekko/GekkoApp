@@ -13,6 +13,7 @@ path = "src/main.rs"
 crossterm = "0.28"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+semver = "1"
 sha2 = "0.10"
 tar = "0.4"
 ureq = "3"

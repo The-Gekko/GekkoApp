@@ -11,6 +11,10 @@ pub struct SystemEnvironment {
     pub architecture: String,
     pub session: String,
     pub desktop: String,
+    pub shell: String,
+    pub display_manager: String,
+    pub greeter: String,
+    pub sddm_installed: bool,
     pub service_manager: String,
     pub package_manager: String,
     pub compatibility: Compatibility,
@@ -26,7 +30,22 @@ impl SystemEnvironment {
     pub fn detect() -> Self {
         let os_release = fs::read_to_string("/etc/os-release").unwrap_or_default();
         let variables = env::vars().collect::<HashMap<_, _>>();
-        Self::from_sources(&os_release, &variables, command_exists("systemctl"))
+        let mut result = Self::from_sources(&os_release, &variables, command_exists("systemctl"));
+        let display_manager = fs::read_link("/etc/systemd/system/display-manager.service")
+            .ok()
+            .and_then(|path| {
+                path.file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+            });
+        let greetd_config = fs::read_to_string("/etc/greetd/config.toml").unwrap_or_default();
+        result.detect_integrations(
+            command_exists("dms"),
+            command_exists("caelestia"),
+            display_manager.as_deref(),
+            &greetd_config,
+            command_exists("sddm") || Path::new("/usr/bin/sddm").is_file(),
+        );
+        result
     }
 
     fn from_sources(
@@ -69,6 +88,10 @@ impl SystemEnvironment {
             architecture: env::consts::ARCH.to_string(),
             session,
             desktop,
+            shell: "desconocido".into(),
+            display_manager: "desconocido".into(),
+            greeter: "desconocido".into(),
+            sddm_installed: false,
             service_manager,
             package_manager,
             compatibility: Compatibility {
@@ -91,8 +114,9 @@ impl SystemEnvironment {
         if self.session != "wayland" {
             reasons.push("se requiere una sesion Wayland".into());
         }
-        if self.desktop != "hyprland" {
-            reasons.push("el primer adaptador validado es Hyprland".into());
+        match self.desktop.as_str() {
+            "hyprland" | "niri" => {}
+            _ => reasons.push("no existe un adaptador validado para este compositor".into()),
         }
         if self.service_manager != "systemd-user" {
             reasons.push("se requiere systemd para servicios de usuario".into());
@@ -101,6 +125,81 @@ impl SystemEnvironment {
             supported: reasons.is_empty(),
             reasons,
         };
+    }
+
+    fn detect_integrations(
+        &mut self,
+        has_dms: bool,
+        has_caelestia: bool,
+        display_manager_unit: Option<&str>,
+        greetd_config: &str,
+        has_sddm: bool,
+    ) {
+        self.sddm_installed = has_sddm;
+        // Availability is not proof that the shell IPC is running.
+        self.shell = match (has_dms, has_caelestia) {
+            (true, true) => "dms, caelestia",
+            (true, false) => "dms",
+            (false, true) => "caelestia",
+            _ => "desconocido",
+        }
+        .into();
+        self.display_manager = match display_manager_unit {
+            Some("greetd.service") => "greetd",
+            Some("sddm.service") => "sddm",
+            Some("gdm.service") => "gdm",
+            Some("lightdm.service") => "lightdm",
+            _ => "desconocido",
+        }
+        .into();
+        self.greeter = if self.display_manager == "greetd" {
+            let mut default_session = false;
+            let is_dms = greetd_config.lines().any(|line| {
+                let line = line.trim();
+                if line.starts_with('[') {
+                    default_session =
+                        line.split('#').next().unwrap_or("").trim() == "[default_session]";
+                    return false;
+                }
+                if !default_session {
+                    return false;
+                }
+                let Some((key, value)) = line.split_once('=') else {
+                    return false;
+                };
+                if key.trim() != "command" {
+                    return false;
+                }
+                let value = value.trim();
+                // Recognize only a simple quoted command. Unknown TOML forms
+                // remain unknown rather than attributing a different greeter.
+                let Some(quote) = value.chars().next().filter(|ch| *ch == '"' || *ch == '\'')
+                else {
+                    return false;
+                };
+                let Some(command) = value[1..].split(quote).next() else {
+                    return false;
+                };
+                let program = command.split_whitespace().next().unwrap_or("");
+                Path::new(program)
+                    .file_name()
+                    .is_some_and(|name| name == "dms-greeter")
+            });
+            if is_dms {
+                "dms-greeter"
+            } else {
+                "desconocido"
+            }
+        } else if self.display_manager == "sddm" {
+            "sddm"
+        } else {
+            "desconocido"
+        }
+        .into();
+    }
+
+    pub fn supports_kisddm(&self) -> bool {
+        self.sddm_installed
     }
 
     pub fn target(&self) -> Option<&'static str> {
@@ -190,6 +289,49 @@ fn command_exists(command: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn niri_dms_greetd_are_supported_without_sddm() {
+        let vars = HashMap::from([
+            ("XDG_SESSION_TYPE".into(), "wayland".into()),
+            ("NIRI_SOCKET".into(), "/run/user/1000/niri.sock".into()),
+        ]);
+        let mut environment = SystemEnvironment::from_sources("ID=arch", &vars, true);
+        environment.detect_integrations(
+            true,
+            false,
+            Some("greetd.service"),
+            "[default_session]\ncommand = \"/usr/bin/dms-greeter --command niri\"\n",
+            false,
+        );
+        assert_eq!(environment.desktop, "niri");
+        assert_eq!(environment.shell, "dms");
+        assert_eq!(environment.display_manager, "greetd");
+        assert_eq!(environment.greeter, "dms-greeter");
+        assert!(!environment.supports_kisddm());
+        assert!(environment.compatibility.supported);
+    }
+
+    #[test]
+    fn installed_shell_does_not_determine_display_manager() {
+        let mut environment = SystemEnvironment::from_sources("ID=arch", &HashMap::new(), true);
+        environment.detect_integrations(true, false, Some("sddm.service"), "", true);
+        assert_eq!(environment.shell, "dms");
+        assert!(environment.supports_kisddm());
+        environment.detect_integrations(true, false, None, "command = \"dms-greeter\"", false);
+        assert!(!environment.supports_kisddm());
+        assert_eq!(environment.greeter, "desconocido");
+    }
+
+    #[test]
+    fn kisddm_requires_installed_sddm_not_the_configured_login_manager() {
+        let mut environment = SystemEnvironment::from_sources("ID=arch", &HashMap::new(), true);
+        environment.detect_integrations(true, false, Some("greetd.service"), "", true);
+        assert!(environment.supports_kisddm());
+        assert_eq!(environment.display_manager, "greetd");
+        environment.detect_integrations(false, false, Some("sddm.service"), "", false);
+        assert!(!environment.supports_kisddm());
+    }
 
     #[test]
     fn detects_supported_arch_hyprland_environment() {

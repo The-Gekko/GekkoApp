@@ -1,4 +1,5 @@
 use crate::kito::{ComponentId, ReleaseState, ReleaseStatus};
+use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -92,6 +93,7 @@ pub struct Requirements {
 #[derive(Debug, Clone, Deserialize)]
 pub struct ModuleRequirement {
     pub id: String,
+    pub constraint: String,
     pub optional: bool,
 }
 
@@ -265,7 +267,12 @@ impl InstallationPlan {
                 }
                 match capability.id.as_str() {
                     "runtime.qt6" => {
-                        packages.extend(["qt6-base", "qt6-declarative", "qt6-wayland"]);
+                        packages.extend([
+                            "qt6-base",
+                            "qt6-declarative",
+                            "qt6-imageformats",
+                            "qt6-wayland",
+                        ]);
                     }
                     "renderer.awww" => {
                         packages.insert("awww");
@@ -796,7 +803,10 @@ fn validate_manifest(
         return Err("contrato de distribucion no soportado".into());
     }
     if manifest.product.id != component_id(component)
-        || manifest.product.repository != component.repository()
+        || !manifest
+            .product
+            .repository
+            .eq_ignore_ascii_case(component.repository())
     {
         return Err(format!(
             "identidad de producto invalida para {}",
@@ -911,17 +921,42 @@ fn validate_manifest(
 }
 
 fn validate_module_dependencies(releases: &[PreparedRelease]) -> Result<(), String> {
-    let available = releases
-        .iter()
-        .map(|release| release.manifest.product.id.as_str())
-        .collect::<BTreeSet<_>>();
+    let mut available = BTreeMap::new();
+    for release in releases {
+        let product = &release.manifest.product;
+        let version = Version::parse(&product.version).map_err(|error| {
+            format!(
+                "{}: version invalida {}: {error}",
+                product.id, product.version
+            )
+        })?;
+        available.insert(product.id.as_str(), version);
+    }
     for release in releases {
         for requirement in &release.manifest.requirements.modules {
-            if !requirement.optional && !available.contains(requirement.id.as_str()) {
-                return Err(format!(
-                    "{} requiere el modulo {}",
+            let constraint = VersionReq::parse(&requirement.constraint).map_err(|error| {
+                format!(
+                    "{}: restriccion invalida para {}: {error}",
                     release.manifest.product.id, requirement.id
-                ));
+                )
+            })?;
+            match available.get(requirement.id.as_str()) {
+                Some(version) if !constraint.matches(version) => {
+                    return Err(format!(
+                        "{} requiere {} {}; version seleccionada: {}",
+                        release.manifest.product.id,
+                        requirement.id,
+                        requirement.constraint,
+                        version
+                    ));
+                }
+                None if !requirement.optional => {
+                    return Err(format!(
+                        "{} requiere el modulo {}",
+                        release.manifest.product.id, requirement.id
+                    ));
+                }
+                _ => {}
             }
         }
     }
@@ -1159,8 +1194,28 @@ mod tests {
         };
         assert_eq!(
             plan.required_arch_packages(),
-            vec!["qt6-base", "qt6-declarative", "qt6-wayland"]
+            vec![
+                "qt6-base",
+                "qt6-declarative",
+                "qt6-imageformats",
+                "qt6-wayland"
+            ]
         );
+    }
+
+    #[test]
+    fn accepts_github_repository_identity_with_normalized_case() {
+        let mut manifest = test_manifest();
+        manifest.product.id = "kisddm".into();
+        manifest.product.repository = "KitotsuMolina/kisddm".into();
+
+        assert!(validate_manifest(
+            &manifest,
+            ComponentId::Kisddm,
+            "v0.1.1",
+            "x86_64-unknown-linux-gnu"
+        )
+        .is_ok());
     }
 
     #[test]
@@ -1267,6 +1322,61 @@ mod tests {
         let mut digest = Sha256::new();
         digest.update(bytes);
         format!("{:x}", digest.finalize())
+    }
+
+    fn dependency_release(id: &str, version: &str) -> PreparedRelease {
+        let mut manifest = test_manifest();
+        manifest.product.id = id.into();
+        manifest.product.version = version.into();
+        PreparedRelease {
+            component: ComponentId::Kiui,
+            manifest_url: String::new(),
+            artifact_url: String::new(),
+            manifest,
+        }
+    }
+
+    #[test]
+    fn validates_required_and_optional_module_versions_before_installing() {
+        for optional in [false, true] {
+            let mut ui = dependency_release("kiui", "0.2.0");
+            ui.manifest.requirements.modules.push(ModuleRequirement {
+                id: "kitsune-compositor".into(),
+                constraint: ">=0.1.3, <0.2.0".into(),
+                optional,
+            });
+            assert_eq!(
+                validate_module_dependencies(&[ui.clone()]).is_ok(),
+                optional
+            );
+            for (version, compatible) in [
+                ("0.1.2", false),
+                ("0.1.3", true),
+                ("0.1.9", true),
+                ("0.2.0", false),
+                ("0.2.0-rc.1", false),
+                ("invalid", false),
+            ] {
+                let dependency = dependency_release("kitsune-compositor", version);
+                assert_eq!(
+                    validate_module_dependencies(&[ui.clone(), dependency]).is_ok(),
+                    compatible,
+                    "optional={optional}, version={version}"
+                );
+            }
+            ui.manifest.requirements.modules[0].constraint = "invalid".into();
+            assert!(validate_module_dependencies(&[ui]).is_err());
+        }
+    }
+
+    #[test]
+    fn module_constraints_are_required_in_manifests() {
+        assert!(
+            serde_json::from_value::<ModuleRequirement>(serde_json::json!({
+                "id": "kitowall", "optional": true
+            }))
+            .is_err()
+        );
     }
 
     fn test_manifest() -> ArtifactManifest {

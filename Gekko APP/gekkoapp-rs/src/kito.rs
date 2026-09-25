@@ -41,10 +41,6 @@ pub struct ModuleSelection {
 }
 
 impl ModuleSelection {
-    pub fn has_product(&self) -> bool {
-        self.kitowall || self.kilivepaper || self.kisddm
-    }
-
     pub fn plan(&self) -> Vec<ComponentId> {
         let mut components = BTreeSet::from([ComponentId::Compositor, ComponentId::Kiui]);
         if self.kitowall {
@@ -180,13 +176,11 @@ mod tests {
     }
 
     #[test]
-    fn selection_requires_at_least_one_product_module() {
-        assert!(!ModuleSelection::default().has_product());
-        assert!(ModuleSelection {
-            kitowall: true,
-            ..ModuleSelection::default()
-        }
-        .has_product());
+    fn empty_selection_installs_only_kiui_and_its_dependency() {
+        assert_eq!(
+            ModuleSelection::default().plan(),
+            vec![ComponentId::Compositor, ComponentId::Kiui]
+        );
     }
 
     #[test]
@@ -195,7 +189,6 @@ mod tests {
             kisddm: true,
             ..ModuleSelection::default()
         };
-        assert!(selection.has_product());
         assert!(selection.plan().contains(&ComponentId::Kisddm));
     }
 }

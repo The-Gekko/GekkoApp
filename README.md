@@ -76,9 +76,12 @@ distribución, arquitectura, sesión gráfica, escritorio y gestor de servicios,
 permite corregir falsos positivos y resuelve los releases necesarios antes de
 modificar el sistema.
 
-La primera matriz soportada es Arch Linux `x86_64`, Wayland, Hyprland y servicios
-de usuario de systemd. KiUI y Kitsune Compositor son componentes obligatorios;
-Kitowall, Kilivepaper y KiSDDM se seleccionan como módulos independientes.
+La primera matriz soportada es Arch Linux `x86_64`, Wayland, Hyprland o Niri y servicios
+de usuario de systemd. KiUI es obligatorio e incluye Kitsune Compositor como
+dependencia técnica. Kitowall, Kilivepaper y KiSDDM son opcionales; se puede
+continuar sin seleccionar ninguno. KiSDDM solo se habilita con SDDM instalado.
+El flujo Kito no instala el escritorio ni DMS, ni cambia el gestor de login.
+Instala las dependencias faltantes y valida los rangos de versiones de los módulos.
 Kitsune se muestra como próximamente y permanece deshabilitado hasta publicar su
 release.
 
