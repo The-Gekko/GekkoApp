@@ -44,6 +44,9 @@ pub const BAUH_LEGACY_LAUNCHERS: &[&str] = &["bauh"];
 
 pub const GEKKO_ADB_PRODUCT_ID: &str = "gekko-adb";
 pub const GEKKO_ADB_REPOSITORY: &str = "The-Gekko/gekko-adb";
+/// Rama que se instala: Gekko ADB Studio no publica releases, asi que su
+/// "ultima version" es el ultimo commit de esta rama.
+pub const GEKKO_ADB_BRANCH: &str = "main";
 pub const GEKKO_ADB_LABEL: &str = "Gekko ADB Studio";
 
 pub const GEKKOAPP_PRODUCT_ID: &str = "gekkoapp";

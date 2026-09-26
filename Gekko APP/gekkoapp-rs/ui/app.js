@@ -128,11 +128,12 @@ function setBusy(value) {
   if (!value) refreshButtons();
 }
 
-// Pide confirmacion y ejecuta la operacion, una cada vez.
+// Pide confirmacion y ejecuta la operacion, una cada vez. Devuelve true solo
+// si la operacion se confirmo y termino bien.
 async function guardedRun(prompt, command, args) {
   if (busy) {
     appendLog("warn", "Ya hay una operacion en curso; espera a que termine.");
-    return;
+    return false;
   }
   // Se marca ocupado ANTES de abrir el dialogo. El overlay solo tapa el raton:
   // con el teclado se podia llegar a otro boton y lanzar una segunda operacion
@@ -141,11 +142,13 @@ async function guardedRun(prompt, command, args) {
   try {
     if (!(await confirmAction(prompt))) {
       appendLog("info", "Operacion cancelada. No se ha modificado nada.");
-      return;
+      return false;
     }
     await runInstall(command, args);
+    return true;
   } catch {
     // runInstall ya registro el error en el log.
+    return false;
   } finally {
     setBusy(false);
   }
@@ -227,7 +230,9 @@ function render() {
 
   const gekkoapp = catalog.items.find((i) => i.id === "gekkoapp");
   const gekkoappStatus = $("gekkoapp-status");
-  if (gekkoapp && gekkoapp.installedVersion) {
+  if (gekkoapp && gekkoapp.installedVersion && gekkoapp.restartPending) {
+    gekkoappStatus.replaceChildren(badge(`v${gekkoapp.installedVersion} · reinicia para usarla`, "outdated"));
+  } else if (gekkoapp && gekkoapp.installedVersion) {
     gekkoappStatus.replaceChildren(badge(`v${gekkoapp.installedVersion}`, "installed"));
   } else {
     gekkoappStatus.replaceChildren(badge("no instalado", "error"));
@@ -252,6 +257,7 @@ function cardFor(id) {
     return $("kito-card");
   }
   if (id === "bauh-fork-the-gekko") return $("bauh-card");
+  if (id === "gekko-adb") return $("gekko-adb-card");
   if (id === "gekkoapp") return $("gekkoapp-card");
   return null;
 }
@@ -547,17 +553,33 @@ async function init() {
     );
   });
 
-  $("gekkoapp-install").addEventListener("click", () => {
-    guardedRun(
+  $("gekkoapp-install").addEventListener("click", async () => {
+    const updated = await guardedRun(
       {
         title: "Actualizar GekkoApp",
         body: "Se descargara el ultimo release verificado (manifiesto + SHA-256) de GekkoApp y se reemplazaran sus binarios en tu carpeta de usuario.",
-        detail: "No requiere sudo. Tendras que reiniciar el Control Center al terminar.",
+        detail: "No requiere sudo. Al terminar podras reiniciar el Control Center para usar la version nueva.",
         confirmLabel: "Actualizar",
       },
       "install_gekkoapp",
       {}
     );
+    // runInstall ya refresco el catalogo: restartPending dice si la version
+    // instalada es mas nueva que esta.
+    const gekkoapp = catalog && catalog.items.find((i) => i.id === "gekkoapp");
+    if (!updated || !gekkoapp || !gekkoapp.restartPending) return;
+    const restart = await confirmAction({
+      title: "GekkoApp actualizado",
+      body: `GekkoApp v${gekkoapp.installedVersion} ya esta instalado. Esta ventana sigue siendo la version anterior.`,
+      detail: "Reiniciar cierra esta ventana y abre la nueva. Si prefieres hacerlo luego, basta con cerrar y abrir GekkoApp.",
+      confirmLabel: "Reiniciar ahora",
+    });
+    if (!restart) return;
+    try {
+      await invoke("restart_gekkoapp");
+    } catch (error) {
+      appendLog("err", String(error));
+    }
   });
 
   $("chaotic-install").addEventListener("click", () => {

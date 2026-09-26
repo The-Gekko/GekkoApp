@@ -148,7 +148,7 @@ pub fn install_gekkoapp(
 /// Instala o actualiza Gekko ADB Studio (The-Gekko) desde su repositorio.
 ///
 /// El proyecto no publica releases todavia, asi que se clona HEAD de
-/// `main` por HTTPS (sin manifiesto ni SHA-256), se instalan las dependencias
+/// `GEKKO_ADB_BRANCH` (`main`) por HTTPS (sin manifiesto ni SHA-256), se instalan las dependencias
 /// de sistema con pacman/eopkg y se ejecuta su propio `install.sh --no-deps
 /// --assume-yes` (mismo instalador que usa el autor: copia la app a XDG, crea
 /// el launcher, el desktop entry, el icono y el metainfo). En Arch se recargan
@@ -220,13 +220,18 @@ pub fn install_gekko_adb(reporter: &dyn Reporter) -> Result<(), String> {
         "https://github.com/{}.git",
         crate::core::catalog::GEKKO_ADB_REPOSITORY
     );
+    // La campana compara la revision registrada con el ultimo commit de esta
+    // misma rama, asi que se clona y actualiza siempre la rama declarada.
+    let branch = crate::core::catalog::GEKKO_ADB_BRANCH;
     if source_dir.join(".git").exists() {
         if !run_shell(&format!(
-            "git -C {quoted_dir} fetch --depth 1 origin main && git -C {quoted_dir} reset --hard origin/main"
+            "git -C {quoted_dir} fetch --depth 1 origin {branch} && git -C {quoted_dir} reset --hard origin/{branch}"
         )) {
             return Err("No se pudo actualizar el codigo fuente de Gekko ADB Studio.".to_owned());
         }
-    } else if !run_shell(&format!("git clone --depth 1 {repo_url} {quoted_dir}")) {
+    } else if !run_shell(&format!(
+        "git clone --depth 1 --branch {branch} {repo_url} {quoted_dir}"
+    )) {
         return Err("No se pudo descargar el codigo fuente de Gekko ADB Studio.".to_owned());
     }
 

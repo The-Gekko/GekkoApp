@@ -10,7 +10,7 @@
 //! Elevacion de privilegios: la GUI no tiene TTY, asi que la contrasena de
 //! sudo se entrega a un helper `askpass` temporal (`SUDO_ASKPASS` +
 //! `GEKKOAPP_ASKPASS`) creado con permisos 0600/0700 y eliminado al terminar.
-use crate::core::catalog::{all_components, CatalogComponent};
+use crate::core::catalog::{all_components, CatalogComponent, GEKKO_ADB_BRANCH};
 use crate::core::reporter::Reporter;
 use crate::environment::SystemEnvironment;
 use crate::installer::InstallPaths;
@@ -127,6 +127,9 @@ pub struct CatalogItem {
     label: &'static str,
     repository: &'static str,
     installed_version: Option<String>,
+    /// Solo GekkoApp: hay una version instalada mas nueva que la que se esta
+    /// ejecutando (se auto-actualizo y falta reiniciar).
+    restart_pending: bool,
 }
 
 #[derive(Serialize)]
@@ -192,8 +195,12 @@ fn installed_version_of(
 ) -> Option<String> {
     // Gekko ADB se registra en el estado con el hash git del clon, no con su
     // version: se consulta primero al lanzador para mostrar la real y el estado
-    // queda como respaldo. Para el resto el estado guarda la version del release.
-    if !matches!(component, CatalogComponent::GekkoAdb) {
+    // queda como respaldo. GekkoApp se compara con el binario en ejecucion. Para
+    // el resto el estado guarda la version del release.
+    if !matches!(
+        component,
+        CatalogComponent::GekkoAdb | CatalogComponent::GekkoApp
+    ) {
         if let Some(version) = installed.get(component.id()) {
             return Some(version.clone());
         }
@@ -299,7 +306,10 @@ fn installed_version_of(
             Some("instalado".to_string())
         }
 
-        CatalogComponent::GekkoApp => Some(env!("CARGO_PKG_VERSION").to_string()),
+        CatalogComponent::GekkoApp => Some(
+            registered_gekkoapp_newer_than_running(installed)
+                .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string()),
+        ),
         CatalogComponent::Kito(kito_comp) => {
             let binary_name = match kito_comp {
                 ComponentId::Compositor => "kitsune-compositor",
@@ -317,6 +327,18 @@ fn installed_version_of(
     }
 }
 
+/// Version de GekkoApp registrada en el estado si es mas nueva que la que se
+/// esta ejecutando: la auto-actualizacion la registra, pero este proceso sigue
+/// siendo el anterior hasta reiniciar. Con un binario compilado desde el clon
+/// puede pasar lo contrario (el estado guarda un release anterior), y entonces
+/// cuenta el binario en ejecucion.
+fn registered_gekkoapp_newer_than_running(installed: &BTreeMap<String, String>) -> Option<String> {
+    let registered = installed.get(CatalogComponent::GekkoApp.id())?;
+    let newer = crate::installer::compare_versions(registered, env!("CARGO_PKG_VERSION"))
+        .is_ok_and(|ordering| ordering == std::cmp::Ordering::Greater);
+    newer.then(|| registered.clone())
+}
+
 #[tauri::command]
 fn catalog_state() -> CatalogView {
     let environment = SystemEnvironment::detect();
@@ -329,6 +351,8 @@ fn catalog_state() -> CatalogView {
             label: component.label(),
             repository: component.repository(),
             installed_version: installed_version_of(&installed, component),
+            restart_pending: component == CatalogComponent::GekkoApp
+                && registered_gekkoapp_newer_than_running(&installed).is_some(),
         })
         .collect();
 
@@ -379,9 +403,11 @@ pub struct UpdateInfo {
     update_available: bool,
 }
 
-/// Consulta la ultima version publicada de cada componente del catalogo con
-/// releases verificados (Kito, Bauh Fork y el propio GekkoApp; Gekko ADB Studio
-/// no publica releases todavia) y la compara con la instalada localmente.
+/// Consulta la ultima version publicada de cada componente y la compara con la
+/// instalada. Kito, Bauh Fork y el propio GekkoApp se comparan con su ultimo
+/// release; Gekko ADB Studio, que no publica releases, con el ultimo commit de
+/// la rama que instala GekkoApp. Todo se pregunta a GitHub en el momento: un
+/// componente nuevo se detecta sin publicar otra version de GekkoApp.
 #[tauri::command]
 async fn check_updates() -> Result<Vec<UpdateInfo>, String> {
     let environment = SystemEnvironment::detect();
@@ -392,10 +418,13 @@ async fn check_updates() -> Result<Vec<UpdateInfo>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let mut updates = Vec::new();
         for component in all_components() {
+            let installed_version = installed_version_of(&installed, component);
             if matches!(component, CatalogComponent::GekkoAdb) {
+                if let Some(update) = gekko_adb_update(&installed, installed_version.is_some()) {
+                    updates.push(update);
+                }
                 continue;
             }
-            let installed_version = installed_version_of(&installed, component);
             let latest = crate::core::github::resolve_latest_release(
                 component.repository(),
                 component.id(),
@@ -428,6 +457,78 @@ async fn check_updates() -> Result<Vec<UpdateInfo>, String> {
     })
     .await
     .map_err(|error| format!("La comprobacion de actualizaciones aborto: {error}"))?
+}
+
+/// Actualizacion de Gekko ADB Studio: revision registrada al instalar frente al
+/// ultimo commit de su rama. Sin revision registrada (lo instalo su propio
+/// `install.sh`) no hay con que comparar y no se informa nada.
+fn gekko_adb_update(
+    installed: &BTreeMap<String, String>,
+    is_installed: bool,
+) -> Option<UpdateInfo> {
+    let component = CatalogComponent::GekkoAdb;
+    let recorded = installed.get(component.id()).filter(|_| is_installed)?;
+    let head =
+        crate::core::github::resolve_branch_head(component.repository(), GEKKO_ADB_BRANCH).ok();
+    let update_available = head
+        .as_deref()
+        .and_then(|head| crate::core::github::same_commit(recorded, head))
+        .is_some_and(|same| !same);
+    Some(UpdateInfo {
+        id: component.id(),
+        label: component.label(),
+        installed: Some(recorded.clone()),
+        // Misma longitud que la revision registrada, para que se lean igual.
+        latest: head.map(|head| head[..recorded.len().clamp(7, head.len())].to_string()),
+        update_available,
+    })
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Reinicio tras la auto-actualizacion
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Abre la version de GekkoApp recien instalada y cierra esta.
+///
+/// No sirve `AppHandle::restart`: relanza el ejecutable en uso, que es el de
+/// la version anterior. Se lanza el `gekkoapp-gui` que registro la
+/// actualizacion (o el symlink de `~/.local/bin`), que ya apunta a la nueva.
+#[tauri::command]
+fn restart_gekkoapp(app: AppHandle) -> Result<(), String> {
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+
+    let paths = InstallPaths::detect()?;
+    let registered = std::fs::read_to_string(paths.state_file())
+        .ok()
+        .and_then(|text| serde_json::from_str::<crate::installer::InstallationState>(&text).ok())
+        .and_then(|mut state| {
+            state
+                .modules
+                .remove(CatalogComponent::GekkoApp.id())?
+                .entrypoints
+                .remove("gekkoapp-gui")
+        })
+        .map(PathBuf::from);
+    let launcher = registered
+        .filter(|path| path.exists())
+        .unwrap_or_else(|| paths.bin_home.join("gekkoapp-gui"));
+    if !launcher.exists() {
+        return Err(format!(
+            "No se encontro {}: cierra y abre GekkoApp a mano.",
+            launcher.display()
+        ));
+    }
+    // Grupo de procesos propio: la nueva ventana no depende de esta.
+    Command::new(&launcher)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0)
+        .spawn()
+        .map_err(|error| format!("No se pudo abrir {}: {error}", launcher.display()))?;
+    app.exit(0);
+    Ok(())
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -653,6 +754,7 @@ pub fn run() {
             uninstall_kito,
             uninstall_bauh,
             uninstall_gekko_adb,
+            restart_gekkoapp,
             theme_state
         ])
         .run(tauri::generate_context!())
@@ -684,5 +786,74 @@ mod tests {
             .any(|item| item.id == "gekkoapp" && item.installed_version.is_some()));
         assert_eq!(view.kito_modules.len(), 5);
         assert!(view.kito_modules.iter().any(|module| module.mandatory));
+    }
+
+    fn registered_gekkoapp(version: &str) -> BTreeMap<String, String> {
+        BTreeMap::from([(
+            CatalogComponent::GekkoApp.id().to_string(),
+            version.to_string(),
+        )])
+    }
+
+    #[test]
+    fn self_update_counts_as_installed_until_restart() {
+        // Se auto-actualizo a una version mas nueva que la que se ejecuta: la
+        // campana no debe volver a ofrecerla y el catalogo pide reiniciar.
+        let installed = registered_gekkoapp("99.0.0");
+        assert_eq!(
+            registered_gekkoapp_newer_than_running(&installed).as_deref(),
+            Some("99.0.0")
+        );
+        assert_eq!(
+            installed_version_of(&installed, CatalogComponent::GekkoApp).as_deref(),
+            Some("99.0.0")
+        );
+    }
+
+    #[test]
+    fn running_binary_wins_over_an_older_or_equal_registration() {
+        for registered in ["0.1.0", env!("CARGO_PKG_VERSION"), "no-es-version"] {
+            let installed = registered_gekkoapp(registered);
+            assert_eq!(registered_gekkoapp_newer_than_running(&installed), None);
+            assert_eq!(
+                installed_version_of(&installed, CatalogComponent::GekkoApp).as_deref(),
+                Some(env!("CARGO_PKG_VERSION"))
+            );
+        }
+        assert_eq!(
+            registered_gekkoapp_newer_than_running(&BTreeMap::new()),
+            None
+        );
+    }
+
+    #[test]
+    fn gekko_adb_without_a_recorded_revision_reports_nothing() {
+        // Sin revision registrada (o sin instalar) no hay con que comparar y no
+        // se consulta a GitHub.
+        assert!(gekko_adb_update(&BTreeMap::new(), true).is_none());
+        let installed = BTreeMap::from([(
+            CatalogComponent::GekkoAdb.id().to_string(),
+            "4c3f9bf".to_string(),
+        )]);
+        assert!(gekko_adb_update(&installed, false).is_none());
+    }
+
+    #[test]
+    #[ignore]
+    fn gekko_adb_update_compares_with_the_published_branch_head() {
+        // Requiere red. Un commit viejo de main (795828f, anterior a 4c3f9bf)
+        // tiene que salir como desactualizado, y el HEAD actual como al dia.
+        let old = BTreeMap::from([(
+            CatalogComponent::GekkoAdb.id().to_string(),
+            "795828f".to_string(),
+        )]);
+        let update = gekko_adb_update(&old, true).expect("hay revision registrada");
+        assert!(update.update_available, "latest = {:?}", update.latest);
+        let head = update.latest.expect("GitHub respondio");
+        assert_eq!(head.len(), 7);
+
+        let current = BTreeMap::from([(CatalogComponent::GekkoAdb.id().to_string(), head)]);
+        let update = gekko_adb_update(&current, true).expect("hay revision registrada");
+        assert!(!update.update_available);
     }
 }

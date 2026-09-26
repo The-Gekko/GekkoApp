@@ -18,7 +18,8 @@
 - 🦊 **Entorno Kito** — KiUI, Kitsune Compositor y módulos (Kitowall, Kilivepaper, KiSDDM) desde releases verificados (manifiesto + SHA-256).
 - 🛍️ **bauh Gekko Edition (Bauh Fork)** — instalación aislada con `pipx` desde un release verificado por SHA-256.
 - 📱 **Gekko ADB Studio** — suite GTK de control ADB (scrcpy, shell, debloat y presets), instalada desde el código fuente del repositorio.
-- 🔄 **Auto-update de GekkoApp** — la app se actualiza a sí misma desde un release verificado (manifiesto + SHA-256), sin sudo.
+- 🔄 **Auto-update de GekkoApp** — la app se actualiza a sí misma desde un release verificado (manifiesto + SHA-256), sin sudo, y al terminar ofrece reiniciarse para abrir la versión nueva.
+- 🔔 **Campana de actualizaciones sin depender de GekkoApp** — cada vez que abres el Control Center (y tras cada operación) pregunta a GitHub en ese momento: el último release de Kito, Bauh y GekkoApp, y el último commit de `main` de Gekko ADB Studio frente al que tienes instalado. Una versión nueva de cualquiera de ellos aparece sola: **no hace falta publicar otra GekkoApp para que la vea**.
 - 📦 **Chaotic AUR** — repositorios optimizados en un clic (Arch Linux).
 - 🎨 **Tema adaptativo** — sigue la paleta de matugen en vivo (Material You).
 
@@ -40,7 +41,7 @@ GekkoApp es el punto de entrada de tres proyectos de The-Gekko. Cada uno se pued
 
 Notas honestas:
 
-- **Gekko ADB Studio no tiene releases verificados (manifiesto + SHA-256)**: GekkoApp clona HEAD de `main` por HTTPS y no hay manifiesto ni SHA-256 que verificar. El diálogo de instalación lo dice tal cual.
+- **Gekko ADB Studio no tiene releases verificados (manifiesto + SHA-256)**: GekkoApp clona HEAD de `main` por HTTPS y no hay manifiesto ni SHA-256 que verificar. El diálogo de instalación lo dice tal cual. Por eso la campana no compara versiones, sino el commit que GekkoApp registró al instalar con el último de `main`: cualquier push a `main` aparece como actualización. Si Gekko ADB se instaló con su propio `install.sh`, GekkoApp no sabe qué commit tienes y la campana no dice nada (instalarlo o actualizarlo una vez desde GekkoApp lo resuelve).
 - **Bauh** se instala como distribución `gekko-bauh` (desde `v0.10.8-gekko.1`), con los ejecutables `gekko-bauh`, `gekko-bauh-tray` y `gekko-bauh-cli` y **una sola entrada de menú** (`org.thegekko.bauh`). Hasta `v0.10.8-gekko.1` el release declaraba además la de la bandeja (`org.thegekko.bauh.tray`); al actualizar, GekkoApp retira esa entrada y el entorno pipx anterior para no dejar huérfanos. Las etiquetas con guion (`vX.Y.Z-gekko.N`) solo las acepta GekkoApp 1.2.0 o posterior.
 - El repositorio antiguo `The-Gekko/Bauh-Fork-The-Gekko` solo se conserva como compatibilidad: los manifiestos ya publicados llevan ese nombre y GekkoApp los sigue aceptando.
 - **Desinstalar desde GekkoApp** borra exactamente los archivos que creó en tu HOME; los paquetes del sistema que instaló con pacman/eopkg (dependencias de Gekko ADB, python-pipx/pipx) no se desinstalan. Gekko ADB: `~/.local/bin/gekko-adb`, `~/.local/share/applications/com.gekko.adb.desktop` (+ los legacy `GekkoADB.desktop` y `org.thegekko.gekko_adb.desktop`), `~/.local/share/metainfo/com.gekko.adb.metainfo.xml`, `~/.local/share/icons/hicolor/512x512/apps/gekko-adb.png`, `~/.local/share/gekko-adb` (app, `.env`, `app.bak.*`) y el clon `~/.cache/gekkoapp/gekko-adb`; conserva `~/.config/gekko-adb` y `~/.local/state/gekko-adb/logs`. Bauh: `pipx uninstall` del entorno registrado, los `.desktop` e iconos registrados (`org.thegekko.bauh`, y `org.thegekko.bauh.tray` si lo dejó un release anterior) y la copia del release; conserva la configuración del usuario (`~/.config/gekko-bauh`).
@@ -119,7 +120,8 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
 cargo test --locked --all-targets --all-features
 cargo build --locked --release
 cargo build --locked --release --features gui --bin gekkoapp-gui
-cargo test --locked -- --ignored resolves_published_bauh_release_from_github   # requiere red
+cargo test --locked --all-features -- --ignored resolves_published gekko_adb_update   # requiere red: consulta GitHub de verdad
+GEKKOAPP_BAUH_DIST=<dist de Bauh> cargo test --locked -- --ignored consumes_a_generated   # release de Bauh generado con scripts/build-bauh-release.sh
 ```
 
 Scripts de release (desde la raíz del repositorio):

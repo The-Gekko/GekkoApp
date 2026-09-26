@@ -104,3 +104,85 @@ pub fn download_manifest_body(url: &str) -> Result<Vec<u8>, String> {
     let bytes = download_bytes(&agent, url, MANIFEST_LIMIT_BYTES)?;
     Ok(bytes)
 }
+
+/// SHA completo (40 caracteres, en minusculas) del ultimo commit de una rama.
+///
+/// Es la "ultima version" de los componentes que se instalan desde una rama
+/// en vez de desde un release (Gekko ADB Studio). Con `Accept:
+/// application/vnd.github.sha` la API responde solo el SHA, sin el JSON del
+/// commit.
+pub fn resolve_branch_head(repository: &str, branch: &str) -> Result<String, String> {
+    let url = format!("https://api.github.com/repos/{repository}/commits/{branch}");
+    let mut response = http_agent()
+        .get(&url)
+        .header("Accept", "application/vnd.github.sha")
+        .call()
+        .map_err(|error| {
+            let text = error.to_string();
+            if text.contains("404") {
+                format!("{repository} no tiene la rama {branch}")
+            } else {
+                describe_release_error(repository, &error)
+            }
+        })?;
+    let body = response
+        .body_mut()
+        .with_config()
+        .limit(MANIFEST_LIMIT_BYTES)
+        .read_to_string()
+        .map_err(|error| format!("respuesta invalida: {error}"))?;
+    let sha = body.trim().to_ascii_lowercase();
+    if sha.len() == 40 && sha.chars().all(|caracter| caracter.is_ascii_hexdigit()) {
+        Ok(sha)
+    } else {
+        Err(format!(
+            "respuesta inesperada al pedir el ultimo commit de {repository}/{branch}"
+        ))
+    }
+}
+
+/// ¿Es `recorded` el mismo commit que `head`?
+///
+/// `recorded` es la revision que GekkoApp registro al instalar (`git rev-parse
+/// --short`, 7 o mas caracteres) y `head` el SHA completo de la rama. Devuelve
+/// `None` si alguno no parece un hash (por ejemplo el marcador "instalado"),
+/// para no afirmar nada que no se puede comprobar.
+pub fn same_commit(recorded: &str, head: &str) -> Option<bool> {
+    let is_hash = |value: &str, min: usize| {
+        (min..=40).contains(&value.len()) && value.chars().all(|c| c.is_ascii_hexdigit())
+    };
+    let recorded = recorded.trim().to_ascii_lowercase();
+    let head = head.trim().to_ascii_lowercase();
+    if !is_hash(&recorded, 7) || !is_hash(&head, 40) {
+        return None;
+    }
+    Some(head.starts_with(&recorded))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const HEAD: &str = "4c3f9bf6ca8d836619226c8e8200da783555d7cd";
+
+    #[test]
+    fn same_commit_accepts_the_short_revision_recorded_at_install() {
+        assert_eq!(same_commit("4c3f9bf", HEAD), Some(true));
+        assert_eq!(same_commit("4C3F9BF6ca", HEAD), Some(true));
+        assert_eq!(same_commit(HEAD, HEAD), Some(true));
+    }
+
+    #[test]
+    fn same_commit_detects_a_newer_branch_head() {
+        assert_eq!(same_commit("795828f", HEAD), Some(false));
+    }
+
+    #[test]
+    fn same_commit_refuses_to_guess_without_a_hash() {
+        assert_eq!(same_commit("instalado", HEAD), None);
+        assert_eq!(same_commit("2.1.0", HEAD), None);
+        assert_eq!(same_commit("4c3f9b", HEAD), None);
+        assert_eq!(same_commit("4c3f9bf", "4c3f9bf"), None);
+        assert_eq!(same_commit("", HEAD), None);
+    }
+}
