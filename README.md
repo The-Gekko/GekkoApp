@@ -124,7 +124,19 @@ cargo test --locked --all-features -- --ignored resolves_published gekko_adb_upd
 GEKKOAPP_BAUH_DIST=<dist de Bauh> cargo test --locked -- --ignored consumes_a_generated   # release de Bauh generado con scripts/build-bauh-release.sh
 ```
 
-Scripts de release (desde la raíz del repositorio):
+### Publicar una versión
+
+`.github/workflows/ci.yml` pasa esa misma puerta (más `shellcheck` y la comparación de los lanzadores) en cada push a `main`. `.github/workflows/release.yml` compila y publica el release al empujar una etiqueta `vX.Y.Z`, en Ubuntu 24.04 (glibc 2.39): no hace falta Rust en tu máquina. Pasos:
+
+1. Sube la versión en `Gekko APP/gekkoapp-rs/Cargo.toml`, `Cargo.lock` (entrada `gekkoapp`), `tauri.conf.json` y la línea «Versión» de este README.
+2. `git push` y espera a que `ci` salga en verde.
+3. `git tag -a vX.Y.Z -m "GekkoApp X.Y.Z" && git push origin vX.Y.Z`.
+
+El workflow comprueba que la etiqueta coincide con `Cargo.toml` y `tauri.conf.json`, pasa los tests, compila, empaqueta con `scripts/build-release-bundle.sh`, verifica el manifiesto contra el artefacto y publica `gekkoapp-X.Y.Z.tar.zst`, `gekkoapp-X.Y.Z.sha256` y `gekkoapp-x86_64-unknown-linux-gnu.manifest.json`. Para repetir la publicación de una etiqueta existente: *Actions → release → Run workflow* con la etiqueta.
+
+Publicar Bauh o cambiar Gekko ADB **no requiere tocar GekkoApp**: la campana los detecta sola (ver arriba).
+
+Scripts de release (desde la raíz del repositorio; `release.yml` usa el primero):
 
 - `scripts/build-release-bundle.sh` — empaqueta `releases/dist/gekkoapp-<versión>.tar.zst`, `.sha256` y el manifiesto (`kitotsu.release-artifact` 1.0, `binary_extract`). La glibc mínima la deduce de los binarios con `objdump -T`; si falta `objdump` aborta en vez de adivinarla.
 - `scripts/build-bauh-release.sh` — empaqueta un release de Bauh para el motor de GekkoApp (`python_pipx`): `product.version = X.Y.Z+gekko.N`, `release.tag = vX.Y.Z-gekko.N` (etiqueta git con guion) y artefacto `bauh-fork-the-gekko-X.Y.Z.gekko.N.tar.zst`. El mismo script vive en el fork como `tools/build-gekkoapp-release.sh`, que ejecuta su `release.yml` en cada etiqueta `v*`.

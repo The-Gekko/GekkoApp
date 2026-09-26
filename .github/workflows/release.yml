@@ -1,0 +1,159 @@
+name: release
+
+# Se dispara al empujar una etiqueta «v*» (por ejemplo v1.4.0) y publica el
+# release que consumen el Control Center («Actualizar GekkoApp») y
+# scripts/install-release.sh. Sustituye a compilar y subir los ficheros a mano.
+#
+# Lo que hace, en orden:
+#   1. comprueba que la etiqueta, Cargo.toml y tauri.conf.json dicen la misma
+#      versión;
+#   2. pasa los tests;
+#   3. compila gekkoapp y gekkoapp-gui en modo release;
+#   4. empaqueta con scripts/build-release-bundle.sh (tarball, .sha256 y
+#      manifiesto; la glibc mínima la deduce de los binarios con objdump);
+#   5. comprueba que el manifiesto corresponde a la etiqueta y al artefacto;
+#   6. publica en la release el tarball, su .sha256 y el manifiesto con el
+#      nombre que busca el resolver (gekkoapp-x86_64-unknown-linux-gnu.manifest.json).
+#
+# Ubuntu 24.04 trae glibc 2.39: los binarios exigen como mucho esa versión,
+# la misma que declaraban los releases compilados a mano.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  # Permite repetir la publicación de una etiqueta ya existente sin tener que
+  # borrarla y volver a crearla.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Etiqueta ya existente que se quiere (re)publicar, p. ej. v1.4.0'
+        required: true
+        type: string
+
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref }}
+  cancel-in-progress: false
+
+# Necesario para crear la release y subirle ficheros con `gh`.
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: compilar, empaquetar y publicar
+    runs-on: ubuntu-24.04
+    env:
+      CRATE_DIR: Gekko APP/gekkoapp-rs
+      TARGET: x86_64-unknown-linux-gnu
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      # ── Puerta: la etiqueta y el código tienen que decir lo mismo ─────────
+      - name: Comprobar que la etiqueta coincide con la versión
+        id: version
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          version="$(sed -n 's/^version = "\(.*\)"/\1/p' "$CRATE_DIR/Cargo.toml" | head -n1)"
+          tauri="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["version"])' "$CRATE_DIR/tauri.conf.json")"
+          if [ "$RELEASE_TAG" != "v$version" ]; then
+            echo "::error::La etiqueta $RELEASE_TAG no corresponde a Cargo.toml ($version); se esperaba v$version."
+            exit 1
+          fi
+          if [ "$tauri" != "$version" ]; then
+            echo "::error::tauri.conf.json dice $tauri y Cargo.toml $version."
+            exit 1
+          fi
+          echo "OK: etiqueta $RELEASE_TAG == version $version"
+          {
+            echo "version=$version"
+            echo "tag=$RELEASE_TAG"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Instalar dependencias de Tauri
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libwebkit2gtk-4.1-dev libgtk-3-dev \
+            libsoup-3.0-dev libjavascriptcoregtk-4.1-dev librsvg2-dev \
+            libxdo-dev libayatana-appindicator3-dev binutils zstd
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Tests
+        working-directory: ${{ env.CRATE_DIR }}
+        run: cargo test --locked --all-targets --all-features
+
+      - name: Compilar los binarios release
+        working-directory: ${{ env.CRATE_DIR }}
+        run: |
+          cargo build --locked --release
+          cargo build --locked --release --features gui --bin gekkoapp-gui
+
+      - name: Empaquetar
+        run: ./scripts/build-release-bundle.sh releases/dist
+
+      # ── Puerta: no publicar un manifiesto que GekkoApp rechazaría ─────────
+      - name: Comprobar el manifiesto y el artefacto
+        env:
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import pathlib
+          import sys
+
+          dist = pathlib.Path('releases/dist')
+          target = os.environ['TARGET']
+          manifest = json.loads((dist / f'gekkoapp-{target}.manifest.json').read_text(encoding='utf-8'))
+          tag, version = os.environ['RELEASE_TAG'], os.environ['RELEASE_VERSION']
+          if manifest['release']['tag'] != tag or manifest['product']['version'] != version:
+              sys.exit(f"el manifiesto dice tag={manifest['release']['tag']!r} "
+                       f"version={manifest['product']['version']!r}; se esperaba {tag!r} / {version!r}")
+          artefacto = dist / manifest['artifact']['file_name']
+          datos = artefacto.read_bytes()
+          if len(datos) != manifest['artifact']['size_bytes']:
+              sys.exit(f'el tamaño de {artefacto.name} no coincide con el manifiesto')
+          if hashlib.sha256(datos).hexdigest() != manifest['artifact']['sha256']:
+              sys.exit(f'el SHA-256 de {artefacto.name} no coincide con el manifiesto')
+          print(f"OK: {artefacto.name} ({len(datos)} bytes), glibc minima "
+                f"{manifest['platform']['libc']['minimum']}")
+          PY
+          cd releases/dist && sha256sum --check "gekkoapp-$RELEASE_VERSION.sha256"
+
+      # Copia de los artefactos accesible aunque la publicación falle.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: releases/dist/
+          if-no-files-found: error
+
+      # Mismos tres ficheros que publicaban los releases hechos a mano. Si la
+      # release ya existe (por ejemplo al relanzar el workflow a mano) se
+      # reemplazan sus ficheros en vez de fallar.
+      - name: Publicar la release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          ficheros=(
+            "releases/dist/gekkoapp-$RELEASE_VERSION.tar.zst"
+            "releases/dist/gekkoapp-$RELEASE_VERSION.sha256"
+            "releases/dist/gekkoapp-$TARGET.manifest.json"
+          )
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "La release $RELEASE_TAG ya existe: se actualizan sus ficheros."
+            gh release upload "$RELEASE_TAG" "${ficheros[@]}" --clobber
+          else
+            gh release create "$RELEASE_TAG" "${ficheros[@]}" \
+              --title "GekkoApp $RELEASE_VERSION" \
+              --generate-notes
+          fi

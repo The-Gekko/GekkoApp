@@ -1,0 +1,67 @@
+name: ci
+
+# Puerta de calidad del README («Verificación y desarrollo») en cada push a
+# main y en cada pull request. Así un fallo sale al subir el código, antes de
+# etiquetar una versión: release.yml solo se dispara con la etiqueta.
+#
+# Ubuntu 24.04 trae glibc 2.39, la misma mínima que declaran los releases.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    name: fmt, clippy y tests
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: Gekko APP/gekkoapp-rs
+    steps:
+      - uses: actions/checkout@v4
+
+      # Dependencias de compilación de Tauri v2 en Debian/Ubuntu (las mismas
+      # que en release.yml).
+      - name: Instalar dependencias de Tauri
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libwebkit2gtk-4.1-dev libgtk-3-dev \
+            libsoup-3.0-dev libjavascriptcoregtk-4.1-dev librsvg2-dev \
+            libxdo-dev libayatana-appindicator3-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: cargo fmt
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+
+      - name: cargo test
+        run: cargo test --locked --all-targets --all-features
+
+  shell:
+    name: shellcheck y lanzadores
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      # --severity=warning: los avisos de nivel info (SC2015 en los
+      # `a && b || true` de install-release.sh) son intencionados.
+      - name: shellcheck
+        run: shellcheck --severity=warning scripts/*.sh GekkoApp.sh "Gekko APP/GekkoApp.sh"
+
+      - name: Los dos lanzadores son idénticos
+        run: cmp GekkoApp.sh "Gekko APP/GekkoApp.sh"
