@@ -8,7 +8,7 @@
 
 **GekkoApp** es un **Control Center de escritorio** (Rust + Tauri v2) para Arch Linux, Garuda y Solus. Con un clic instalas, actualizas, desinstalas y mantienes todo tu entorno sin tocar la terminal.
 
-> Versión: **1.3.0**. Los releases están en [Releases](https://github.com/The-Gekko/GekkoApp/releases); desde la app se actualiza con el botón **Actualizar GekkoApp**.
+> Versión: **1.4.0**. Los releases están en [Releases](https://github.com/The-Gekko/GekkoApp/releases); desde la app se actualiza con el botón **Actualizar GekkoApp**.
 
 ## ✨ Lo que trae
 
