@@ -287,6 +287,13 @@ pub fn print_detected_environment(
     environment: &crate::environment::SystemEnvironment,
 ) {
     reporter.info("Entorno detectado");
+    reporter.info(&format!(
+        "Shell instalado: {}; login configurado: {}; greeter: {}; SDDM instalado: {}",
+        environment.shell,
+        environment.display_manager,
+        environment.greeter,
+        environment.sddm_installed
+    ));
     println!(
         "  {}Distribucion:{} {} ({})",
         DIM, RESET, environment.distro_name, environment.distro_id
@@ -306,7 +313,7 @@ pub fn print_detected_environment(
         DIM, RESET, environment.package_manager
     );
     if environment.compatibility.supported {
-        reporter.ok("Entorno compatible con la primera version de Kito.");
+        reporter.ok("Entorno compatible con GekkoApp; Kito valida sus requisitos por separado.");
     } else {
         reporter.warn("El entorno no esta soportado completamente.");
         for reason in &environment.compatibility.reasons {

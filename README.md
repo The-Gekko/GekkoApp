@@ -15,7 +15,7 @@
 - 🖥️ **Control Center (GUI)** — desde aquí lo controlas todo: instalar, actualizar, desinstalar componentes y ver novedades con la campana 🔔. Cada acción muestra antes un diálogo de confirmación con lo que va a cambiar y se puede cancelar; los de Bauh y Gekko ADB detallan paquetes y rutas.
 - 🐧 **Soporte Multi-Distro (Arch, Garuda y Solus)** — detecta `pacman` y `eopkg` automáticamente y adapta los paquetes y las vistas.
 - 🗑️ **Desinstalación limpia e idempotente** — desinstala Kito, Bauh y Gekko ADB desde la GUI o el CLI. Sin residuos: se borra lo que GekkoApp instaló y se conservan tus datos (`~/.config/gekko-bauh`, `~/.config/gekko-adb`, `~/.local/state/gekko-adb/logs`).
-- 🦊 **Entorno Kito** — KiUI, Kitsune Compositor y módulos (Kitowall, Kilivepaper, KiSDDM) desde releases verificados (manifiesto + SHA-256).
+- 🦊 **Entorno Kito** — KiUI, Kitsune Compositor y módulos (Kitowall, Kilivepaper, KiSDDM, Kitsune) desde releases verificados (manifiesto + SHA-256).
 - 🛍️ **bauh Gekko Edition (Bauh Fork)** — instalación aislada con `pipx` desde un release verificado por SHA-256.
 - 📱 **Gekko ADB Studio** — suite GTK de control ADB (scrcpy, shell, debloat y presets), instalada desde el código fuente del repositorio.
 - 🔄 **Auto-update de GekkoApp** — la app se actualiza a sí misma desde un release verificado (manifiesto + SHA-256), sin sudo, y al terminar ofrece reiniciarse para abrir la versión nueva.
@@ -157,3 +157,13 @@ Scripts de release (desde la raíz del repositorio; `release.yml` usa el primero
 ## 📄 Licencia
 
 **zlib/libpng** (SPDX `Zlib`), (c) 2026 The-Gekko — véase [`LICENSE`](LICENSE) · Desarrollado con ❤️ para la comunidad de Linux por **The-Gekko** y colaboradores.
+
+### Integración Kito en Control Center
+
+KiUI incluye Kitsune Compositor como dependencia técnica. Los demás módulos son
+opcionales; KiSDDM requiere SDDM instalado. El flujo valida Wayland con Niri o
+Hyprland y presenta versiones y paquetes antes de confirmar la instalación.
+Consulta [el flujo y sus límites](docs/entorno-kito.md).
+
+Kitsune es opcional y se instala desde `KitotsuMolina/kitsunev2.0`.
+Consulta [la integración y sus pruebas](docs/kitsune-v2.md).

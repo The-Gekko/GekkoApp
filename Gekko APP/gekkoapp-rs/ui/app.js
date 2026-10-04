@@ -165,7 +165,9 @@ function render() {
   const env = catalog;
   const envText =
     `${env.distroName} · ${env.desktop} · ${env.session} · ${env.target || "sin target"}` +
-    (env.compatible ? "" : " · NO COMPATIBLE");
+    (env.compatible ? "" : " · NO COMPATIBLE") +
+    ` · Shell instalado: ${env.shell} · Login: ${env.displayManager} · Greeter: ${env.greeter} · SDDM instalado: ${env.sddmInstalled ? "si" : "no"}` +
+    (env.kitoUnavailableReason ? ` · Kito: ${env.kitoUnavailableReason}` : "");
   $("env").textContent = envText;
 
   if (env.distroId === "solus" || env.packageManager === "eopkg") {
@@ -195,8 +197,8 @@ function render() {
     box.type = "checkbox";
     // Un modulo ya instalado se marca: si se dejara sin marcar, "Actualizar"
     // reinstalaria el entorno sin el.
-    box.checked = m.mandatory || Boolean(m.installedVersion);
-    box.disabled = m.mandatory;
+    box.checked = !m.unavailableReason && (m.mandatory || Boolean(m.installedVersion));
+    box.disabled = m.mandatory || Boolean(m.unavailableReason);
     box.id = `mod-${m.productId}`;
     box.dataset.product = m.productId;
     label.appendChild(box);
@@ -205,7 +207,7 @@ function render() {
 
     const version = document.createElement("span");
     version.className = "version";
-    version.textContent = m.mandatory ? "(obligatorio)" : (m.installedVersion || "no instalado");
+    version.textContent = m.unavailableReason || (m.productId === "kitsune-compositor" ? "(dependencia de KiUI)" : m.mandatory ? "(obligatorio)" : (m.installedVersion || "no instalado"));
     row.appendChild(version);
 
     modules.appendChild(row);
@@ -240,7 +242,7 @@ function render() {
 }
 
 function refreshButtons() {
-  $("kito-install").disabled = $("kito-pass").value.trim() === "";
+  $("kito-install").disabled = busy || Boolean(catalog?.kitoUnavailableReason);
   $("bauh-install").disabled = $("bauh-pass").value.trim() === "";
   $("gekko-adb-install").disabled = $("gekko-adb-pass").value.trim() === "";
   $("chaotic-install").disabled = $("chaotic-pass").value.trim() === "";
@@ -253,7 +255,7 @@ const bellMenu = $("bell-menu");
 const bellBadge = $("bell-badge");
 
 function cardFor(id) {
-  if (["kitsune-compositor", "kiui", "kitowall", "kilivepaper", "kisddm"].includes(id)) {
+  if (["kitsune-compositor", "kiui", "kitowall", "kilivepaper", "kisddm", "kitsune"].includes(id)) {
     return $("kito-card");
   }
   if (id === "bauh-fork-the-gekko") return $("bauh-card");
@@ -459,27 +461,43 @@ async function init() {
   const INSTALL_NOTE =
     "Se instalaran paquetes del sistema con tu contrasena de sudo. Puedes seguir el detalle en el panel de Progreso.";
 
-  $("kito-install").addEventListener("click", () => {
+  $("kito-install").addEventListener("click", async () => {
+    if (busy) return;
     const selection = {
       kitowall: $("mod-kitowall").checked,
       kilivepaper: $("mod-kilivepaper").checked,
       kisddm: $("mod-kisddm").checked,
+      kitsune: $("mod-kitsune").checked,
     };
-    const elegidos = Object.entries(selection)
-      .filter(([, on]) => on)
-      .map(([nombre]) => nombre);
-    guardedRun(
-      {
+    setBusy(true);
+    let plan = null;
+    try {
+      appendLog("info", "Preparando versiones y dependencias de Kito...");
+      plan = await invoke("prepare_kito", { selection });
+      const missing = plan.missingPackages;
+      if (missing.length && !$("kito-pass").value.trim()) {
+        appendLog("warn", `Introduce tu contrasena de sudo para instalar: ${missing.join(", ")}.`);
+        return;
+      }
+      const accepted = await confirmAction({
         title: "Instalar el entorno Kito",
-        body: `Se instalaran KiUI y Kitsune Compositor${
-          elegidos.length ? `, ademas de: ${elegidos.join(", ")}` : ""
-        }.`,
-        detail: INSTALL_NOTE,
+        body: plan.components.join("\n"),
+        detail: `Dependencias requeridas: ${plan.packages.join(", ") || "ninguna"}.\nPaquetes faltantes: ${missing.join(", ") || "ninguno"}.\nSe instalaran los componentes indicados en tu directorio de usuario. Los modulos no seleccionados que ya existan se conservan.`,
         confirmLabel: "Instalar",
-      },
-      "install_kito",
-      { selection, password: $("kito-pass").value }
-    );
+      });
+      if (!accepted) {
+        appendLog("info", "Instalacion cancelada sin cambios.");
+        return;
+      }
+      await runInstall("install_kito", { planId: plan.planId, password: $("kito-pass").value });
+    } catch (error) {
+      appendLog("err", String(error));
+    } finally {
+      if (plan) {
+        try { await invoke("cancel_kito_plan", { planId: plan.planId }); } catch {}
+      }
+      setBusy(false);
+    }
   });
 
   // Cada modal enumera TODAS las mutaciones del flujo, incluidas las preguntas

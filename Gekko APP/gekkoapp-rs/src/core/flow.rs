@@ -351,16 +351,25 @@ fn confirm_or_override_environment(
     }
 }
 
-fn select_kito_modules(reporter: &dyn Reporter) -> Option<ModuleSelection> {
+fn select_kito_modules(
+    reporter: &dyn Reporter,
+    environment: &SystemEnvironment,
+) -> Option<ModuleSelection> {
     let mut selection = ModuleSelection::default();
     loop {
         reporter.clear_screen();
         reporter.header("MODULOS DEL ENTORNO KITO");
         println!("  {}Obligatorios{}", BOLD, RESET);
         println!("  {}[✓]{} KiUI", FG_GREEN, RESET);
-        println!("  {}[✓]{} Kitsune Compositor", FG_GREEN, RESET);
+        println!(
+            "  {}[✓]{} Kitsune Compositor (dependencia de KiUI)",
+            FG_GREEN, RESET
+        );
         println!();
-        println!("  {}Selecciona uno o varios modulos{}", BOLD, RESET);
+        println!(
+            "  {}Modulos opcionales (puedes continuar sin seleccionar ninguno){}",
+            BOLD, RESET
+        );
         println!(
             "  [{}] [1] Kitowall       Wallpapers estaticos",
             if selection.kitowall { "x" } else { " " }
@@ -370,12 +379,17 @@ fn select_kito_modules(reporter: &dyn Reporter) -> Option<ModuleSelection> {
             if selection.kilivepaper { "x" } else { " " }
         );
         println!(
-            "  [{}] [3] KiSDDM          Pantalla de inicio SDDM",
-            if selection.kisddm { "x" } else { " " }
+            "  [{}] [3] KiSDDM          Pantalla de inicio SDDM{}",
+            if selection.kisddm { "x" } else { " " },
+            if environment.supports_kisddm() {
+                ""
+            } else {
+                " [requiere SDDM instalado]"
+            }
         );
         println!(
-            "  {}[--] [4] Kitsune        Espectro de audio  [PROXIMAMENTE]{}",
-            DIM, RESET
+            "  [{}] [4] Kitsune        Espectro de audio",
+            if selection.kitsune { "x" } else { " " }
         );
         println!();
         println!("  {}[5]{} Continuar", FG_CYAN, RESET);
@@ -385,16 +399,10 @@ fn select_kito_modules(reporter: &dyn Reporter) -> Option<ModuleSelection> {
         match reporter.read_line().as_str() {
             "1" => selection.kitowall = !selection.kitowall,
             "2" => selection.kilivepaper = !selection.kilivepaper,
-            "3" => selection.kisddm = !selection.kisddm,
-            "4" => {
-                reporter.warn("Kitsune estara disponible proximamente.");
-                thread::sleep(Duration::from_secs(1));
-            }
-            "5" if selection.has_product() => return Some(selection),
-            "5" => {
-                reporter.warn("Selecciona al menos Kitowall, Kilivepaper o KiSDDM.");
-                thread::sleep(Duration::from_secs(2));
-            }
+            "3" if environment.supports_kisddm() => selection.kisddm = !selection.kisddm,
+            "3" => reporter.warn("KiSDDM requiere SDDM instalado."),
+            "4" => selection.kitsune = !selection.kitsune,
+            "5" => return Some(selection),
             "0" => return None,
             _ => {
                 reporter.warn("Opcion no valida.");
@@ -404,21 +412,13 @@ fn select_kito_modules(reporter: &dyn Reporter) -> Option<ModuleSelection> {
     }
 }
 
-/// Non-interactive install of a concrete Kito module selection.
-///
-/// Used by the CLI after module selection and by the GUI from its catalog.
-/// Returns the number of active modules on success.
-pub fn install_kito_plan(
+/// Resolve and validate the selected Kito releases without installing packages.
+pub fn prepare_kito_plan(
     reporter: &dyn Reporter,
-    environment: SystemEnvironment,
-    selection: ModuleSelection,
-    require_confirmation: bool,
-) -> Result<usize, String> {
-    if !environment.compatibility.supported {
-        return Err(
-            "La instalacion se bloqueo para evitar una configuracion incompatible.".to_owned(),
-        );
-    }
+    environment: &SystemEnvironment,
+    selection: &ModuleSelection,
+) -> Result<InstallationPlan, String> {
+    environment.validate_kito(selection.kisddm)?;
     let target = environment
         .target()
         .ok_or_else(|| "No existe un target de release para esta arquitectura.".to_owned())?;
@@ -465,21 +465,27 @@ pub fn install_kito_plan(
         ));
     }
     reporter.ok("Preflight completo: manifests, dependencias y artefactos son coherentes.");
-    println!();
-    println!("  {}Componentes:{}", BOLD, RESET);
     for release in &installation.releases {
-        println!(
-            "    - {} {}",
+        reporter.info(&format!(
+            "{} {}",
             release.component_label, release.manifest.product.version
-        );
+        ));
     }
-    println!("  {}Dependencias del sistema:{}", BOLD, RESET);
-    if packages.is_empty() {
-        println!("    - Ninguna adicional");
-    } else {
-        println!("    - {}", packages.join(", "));
-    }
+    reporter.info(&format!(
+        "Dependencias del sistema: {}",
+        packages.join(", ")
+    ));
 
+    Ok(installation)
+}
+
+pub fn install_kito_plan(
+    reporter: &dyn Reporter,
+    environment: SystemEnvironment,
+    selection: ModuleSelection,
+    require_confirmation: bool,
+) -> Result<usize, String> {
+    let installation = prepare_kito_plan(reporter, &environment, &selection)?;
     if require_confirmation {
         print!("  {}Instalar este plan?{} [s/N]: ", FG_YELLOW, RESET);
         let _ = io::stdout().flush();
@@ -491,6 +497,20 @@ pub fn install_kito_plan(
         }
     }
 
+    install_prepared_kito_plan(reporter, &installation)
+}
+
+pub fn install_prepared_kito_plan(
+    reporter: &dyn Reporter,
+    installation: &InstallationPlan,
+) -> Result<usize, String> {
+    let (packages, unsupported) = installation.required_host_packages(is_solus_linux());
+    if !unsupported.is_empty() {
+        return Err(format!(
+            "Capacidades sin soporte: {}",
+            unsupported.join(", ")
+        ));
+    }
     let paths = InstallPaths::detect()?;
     reporter.step("Descargando y verificando todos los artefactos antes de modificar paquetes...");
     installation.prefetch(&paths)?;
@@ -531,7 +551,7 @@ pub fn install_kito_environment(reporter: &dyn Reporter) {
             .info("La deteccion manual corrige falsos positivos; no habilita soporte inexistente.");
         return;
     }
-    let Some(selection) = select_kito_modules(reporter) else {
+    let Some(selection) = select_kito_modules(reporter, &environment) else {
         return;
     };
     match install_kito_plan(reporter, environment, selection, true) {
@@ -709,6 +729,7 @@ pub fn uninstall_kito_environment(reporter: &dyn Reporter) -> Result<(), String>
         "kitowall",
         "kilivepaper",
         "kisddm",
+        "kitsune",
     ] {
         if let Err(error) = crate::installer::uninstall_registered_module(id) {
             reporter.err(&format!("{id}: {error}"));

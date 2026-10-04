@@ -386,12 +386,14 @@ button:disabled {
 }
 
 .modal-body {
+  white-space: pre-line;
   margin: 0 0 10px;
   line-height: 1.5;
   color: var(--text);
 }
 
 .modal-detail {
+  white-space: pre-line;
   margin: 0;
   line-height: 1.5;
   color: var(--muted);

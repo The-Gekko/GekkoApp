@@ -13,7 +13,7 @@
 use crate::core::catalog::{all_components, CatalogComponent, GEKKO_ADB_BRANCH};
 use crate::core::reporter::Reporter;
 use crate::environment::SystemEnvironment;
-use crate::installer::InstallPaths;
+use crate::installer::{InstallPaths, InstallationPlan};
 use crate::kito::{ComponentId, ModuleSelection};
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -21,6 +21,8 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 use tauri::{AppHandle, Emitter};
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -138,6 +140,7 @@ pub struct ModuleView {
     product_id: &'static str,
     label: &'static str,
     mandatory: bool,
+    unavailable_reason: Option<String>,
     installed_version: Option<String>,
 }
 
@@ -151,6 +154,11 @@ pub struct CatalogView {
     desktop: String,
     target: Option<&'static str>,
     compatible: bool,
+    shell: String,
+    display_manager: String,
+    greeter: String,
+    sddm_installed: bool,
+    kito_unavailable_reason: Option<String>,
     items: Vec<CatalogItem>,
     kito_modules: Vec<ModuleView>,
 }
@@ -317,6 +325,7 @@ fn installed_version_of(
                 ComponentId::Kitowall => "kitowall",
                 ComponentId::Kilivepaper => "kilivepaper",
                 ComponentId::Kisddm => "kisddm",
+                ComponentId::Kitsune => "kitsune",
             };
             let launcher = paths.bin_home.join(binary_name);
             if launcher.exists() || is_binary_in_path(binary_name) {
@@ -363,6 +372,13 @@ fn catalog_state() -> CatalogView {
                 product_id: component.product_id(),
                 label: component.label(),
                 mandatory: matches!(component, ComponentId::Compositor | ComponentId::Kiui),
+                unavailable_reason: if component == ComponentId::Kisddm
+                    && !environment.supports_kisddm()
+                {
+                    Some("Requiere SDDM instalado".into())
+                } else {
+                    None
+                },
                 installed_version: installed_version_of(
                     &installed,
                     CatalogComponent::Kito(component),
@@ -376,7 +392,13 @@ fn catalog_state() -> CatalogView {
 
     let target = environment.target();
 
+    let kito_unavailable_reason = environment.validate_kito(false).err();
     CatalogView {
+        shell: environment.shell,
+        display_manager: environment.display_manager,
+        greeter: environment.greeter,
+        sddm_installed: environment.sddm_installed,
+        kito_unavailable_reason,
         distro_id: environment.distro_id,
         distro_name: environment.distro_name,
         package_manager: environment.package_manager,
@@ -599,28 +621,106 @@ fn require_password(password: Option<String>) -> Result<String, String> {
 //  Comandos de instalacion
 // ─────────────────────────────────────────────────────────────────────────────
 
+struct PendingKitoPlan {
+    id: u64,
+    selection: ModuleSelection,
+    installation: InstallationPlan,
+}
+
+// A prepared plan is consumed once, so installation uses the exact reviewed manifests.
+static PENDING_KITO: Mutex<Option<PendingKitoPlan>> = Mutex::new(None);
+static NEXT_KITO_PLAN: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct KitoPlanView {
+    plan_id: u64,
+    components: Vec<String>,
+    packages: Vec<String>,
+    missing_packages: Vec<String>,
+}
+
+#[tauri::command]
+async fn prepare_kito(app: AppHandle, selection: ModuleSelection) -> Result<KitoPlanView, String> {
+    *PENDING_KITO.lock().map_err(|e| e.to_string())? = None;
+    tauri::async_runtime::spawn_blocking(move || {
+        let environment = SystemEnvironment::detect();
+        let reporter = GuiReporter { app };
+        let installation =
+            crate::core::flow::prepare_kito_plan(&reporter, &environment, &selection)?;
+        let (packages, _) =
+            installation.required_host_packages(crate::core::system::is_solus_linux());
+        let id = NEXT_KITO_PLAN.fetch_add(1, Ordering::Relaxed);
+        let view = KitoPlanView {
+            plan_id: id,
+            components: installation
+                .releases
+                .iter()
+                .map(|r| format!("{} {}", r.component_label, r.manifest.product.version))
+                .collect(),
+            missing_packages: packages
+                .iter()
+                .filter(|p| !crate::core::system::is_package_installed(p))
+                .map(|p| p.to_string())
+                .collect(),
+            packages: packages.iter().map(|p| p.to_string()).collect(),
+        };
+        *PENDING_KITO.lock().map_err(|e| e.to_string())? = Some(PendingKitoPlan {
+            id,
+            selection,
+            installation,
+        });
+        Ok(view)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn cancel_kito_plan(plan_id: u64) -> Result<(), String> {
+    let mut pending = PENDING_KITO.lock().map_err(|e| e.to_string())?;
+    if pending.as_ref().is_some_and(|plan| plan.id == plan_id) {
+        *pending = None;
+    }
+    Ok(())
+}
+
+fn take_kito_plan(
+    pending: &mut Option<PendingKitoPlan>,
+    id: u64,
+) -> Result<PendingKitoPlan, String> {
+    if !pending.as_ref().is_some_and(|plan| plan.id == id) {
+        return Err("El plan ya no esta disponible; vuelve a prepararlo.".into());
+    }
+    Ok(pending.take().expect("plan checked above"))
+}
+
 #[tauri::command]
 async fn install_kito(
     app: AppHandle,
-    selection: ModuleSelection,
+    plan_id: u64,
     password: Option<String>,
 ) -> Result<usize, String> {
-    let environment = SystemEnvironment::detect();
-    if !environment.compatibility.supported {
-        return Err(format!(
-            "El entorno no es compatible: {}",
-            if environment.compatibility.reasons.is_empty() {
-                "revisa la deteccion del sistema.".to_string()
-            } else {
-                environment.compatibility.reasons.join("; ")
-            }
-        ));
-    }
-    let password = require_password(password)?;
+    let pending = take_kito_plan(
+        &mut *PENDING_KITO.lock().map_err(|e| e.to_string())?,
+        plan_id,
+    )?;
+    SystemEnvironment::detect().validate_kito(pending.selection.kisddm)?;
+    let (packages, _) = pending
+        .installation
+        .required_host_packages(crate::core::system::is_solus_linux());
+    let needs_sudo = packages
+        .iter()
+        .any(|p| !crate::core::system::is_package_installed(p));
+    let password = if needs_sudo {
+        Some(require_password(password)?)
+    } else {
+        None
+    };
     let reporter = GuiReporter { app };
     tauri::async_runtime::spawn_blocking(move || {
-        let _guard = AskpassGuard::setup(&password)?;
-        crate::core::flow::install_kito_plan(&reporter, environment, selection, false)
+        let _guard = password.as_deref().map(AskpassGuard::setup).transpose()?;
+        crate::core::flow::install_prepared_kito_plan(&reporter, &pending.installation)
     })
     .await
     .map_err(|error| format!("La tarea de instalacion aborto: {error}"))?
@@ -746,6 +846,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             catalog_state,
             check_updates,
+            prepare_kito,
+            cancel_kito_plan,
             install_kito,
             install_bauh,
             install_gekko_adb,
@@ -766,10 +868,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn prepared_plan_rejects_stale_ids_and_can_only_be_consumed_once() {
+        let mut pending = Some(PendingKitoPlan {
+            id: 42,
+            selection: ModuleSelection::default(),
+            installation: InstallationPlan { releases: vec![] },
+        });
+        assert!(take_kito_plan(&mut pending, 41).is_err());
+        assert!(pending.is_some());
+        assert!(take_kito_plan(&mut pending, 42).is_ok());
+        assert!(take_kito_plan(&mut pending, 42).is_err());
+    }
+
+    #[test]
     fn catalog_state_reports_all_components() {
         let view = catalog_state();
 
-        assert_eq!(view.items.len(), 8);
+        assert_eq!(view.items.len(), 9);
+        assert!(view.items.iter().any(|item| item.id == "kitsune"
+            && item.label == "Kitsune"
+            && item.repository == "KitotsuMolina/kitsunev2.0"));
         assert!(view
             .items
             .iter()
@@ -784,7 +902,13 @@ mod tests {
             .items
             .iter()
             .any(|item| item.id == "gekkoapp" && item.installed_version.is_some()));
-        assert_eq!(view.kito_modules.len(), 5);
+        assert_eq!(view.kito_modules.len(), 6);
+        assert!(view
+            .kito_modules
+            .iter()
+            .any(|module| module.product_id == "kitsune"
+                && !module.mandatory
+                && module.unavailable_reason.is_none()));
         assert!(view.kito_modules.iter().any(|module| module.mandatory));
     }
 

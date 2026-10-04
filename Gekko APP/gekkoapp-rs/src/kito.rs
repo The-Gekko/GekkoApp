@@ -8,6 +8,7 @@ pub enum ComponentId {
     Kitowall,
     Kilivepaper,
     Kisddm,
+    Kitsune,
 }
 
 impl ComponentId {
@@ -18,6 +19,7 @@ impl ComponentId {
             Self::Kitowall => "Kitowall (wallpapers estaticos)",
             Self::Kilivepaper => "Kilivepaper (live wallpapers)",
             Self::Kisddm => "KiSDDM (pantalla de inicio SDDM)",
+            Self::Kitsune => "Kitsune",
         }
     }
 
@@ -28,6 +30,7 @@ impl ComponentId {
             Self::Kitowall => "kitowall",
             Self::Kilivepaper => "kilivepaper",
             Self::Kisddm => "kisddm",
+            Self::Kitsune => "kitsune",
         }
     }
 
@@ -38,6 +41,7 @@ impl ComponentId {
             Self::Kitowall => "KitotsuMolina/KitowallV2",
             Self::Kilivepaper => "KitotsuMolina/Kilivepaper",
             Self::Kisddm => "KitotsuMolina/KiSDDM",
+            Self::Kitsune => "KitotsuMolina/kitsunev2.0",
         }
     }
 }
@@ -47,13 +51,11 @@ pub struct ModuleSelection {
     pub kitowall: bool,
     pub kilivepaper: bool,
     pub kisddm: bool,
+    #[serde(default)]
+    pub kitsune: bool,
 }
 
 impl ModuleSelection {
-    pub fn has_product(&self) -> bool {
-        self.kitowall || self.kilivepaper || self.kisddm
-    }
-
     pub fn plan(&self) -> Vec<ComponentId> {
         let mut components = BTreeSet::from([ComponentId::Compositor, ComponentId::Kiui]);
         if self.kitowall {
@@ -64,6 +66,9 @@ impl ModuleSelection {
         }
         if self.kisddm {
             components.insert(ComponentId::Kisddm);
+        }
+        if self.kitsune {
+            components.insert(ComponentId::Kitsune);
         }
         components.into_iter().collect()
     }
@@ -122,6 +127,51 @@ mod tests {
     use super::*;
 
     #[test]
+    fn kitsune_is_optional_and_uses_the_v2_repository() {
+        let old: ModuleSelection =
+            serde_json::from_str(r#"{"kitowall":false,"kilivepaper":false,"kisddm":false}"#)
+                .unwrap();
+        assert!(!old.plan().contains(&ComponentId::Kitsune));
+        let selected = ModuleSelection {
+            kitsune: true,
+            ..old
+        }
+        .plan();
+        assert_eq!(
+            selected,
+            vec![
+                ComponentId::Compositor,
+                ComponentId::Kiui,
+                ComponentId::Kitsune
+            ]
+        );
+        assert_eq!(ComponentId::Kitsune.label(), "Kitsune");
+        assert_eq!(
+            ComponentId::Kitsune.repository(),
+            "KitotsuMolina/kitsunev2.0"
+        );
+        assert_eq!(ComponentId::Kitsune.product_id(), "kitsune");
+    }
+
+    #[test]
+    #[ignore = "requires network and published releases"]
+    fn resolves_published_kitsune_with_its_base_dependencies() {
+        let target = "x86_64-unknown-linux-gnu";
+        let selection = ModuleSelection {
+            kitsune: true,
+            ..ModuleSelection::default()
+        };
+        let statuses = resolve_releases(&selection.plan(), target);
+        assert!(all_available(&statuses), "{statuses:?}");
+        let plan = crate::installer::InstallationPlan::prepare(&statuses, target).unwrap();
+        assert!(plan
+            .releases
+            .iter()
+            .any(|r| r.manifest.product.id == "kitsune"));
+        assert!(plan.required_host_packages(false).1.is_empty());
+    }
+
+    #[test]
     fn mandatory_components_are_always_included() {
         let plan = ModuleSelection {
             kilivepaper: true,
@@ -137,13 +187,11 @@ mod tests {
     }
 
     #[test]
-    fn selection_requires_at_least_one_product_module() {
-        assert!(!ModuleSelection::default().has_product());
-        assert!(ModuleSelection {
-            kitowall: true,
-            ..ModuleSelection::default()
-        }
-        .has_product());
+    fn empty_selection_installs_only_base() {
+        assert_eq!(
+            ModuleSelection::default().plan(),
+            vec![ComponentId::Compositor, ComponentId::Kiui]
+        );
     }
 
     #[test]
@@ -152,7 +200,6 @@ mod tests {
             kisddm: true,
             ..ModuleSelection::default()
         };
-        assert!(selection.has_product());
         assert!(selection.plan().contains(&ComponentId::Kisddm));
     }
 }

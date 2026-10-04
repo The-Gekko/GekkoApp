@@ -99,6 +99,7 @@ pub fn all_components() -> Vec<CatalogComponent> {
         CatalogComponent::Kito(ComponentId::Kitowall),
         CatalogComponent::Kito(ComponentId::Kilivepaper),
         CatalogComponent::Kito(ComponentId::Kisddm),
+        CatalogComponent::Kito(ComponentId::Kitsune),
         CatalogComponent::BauhFork,
         CatalogComponent::GekkoAdb,
         CatalogComponent::GekkoApp,

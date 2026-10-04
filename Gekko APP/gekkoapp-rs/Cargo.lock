@@ -1066,6 +1066,7 @@ name = "gekkoapp"
 version = "1.4.0"
 dependencies = [
  "crossterm",
+ "semver",
  "serde",
  "serde_json",
  "sha2",

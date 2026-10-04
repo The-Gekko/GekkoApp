@@ -1,4 +1,5 @@
 use crate::kito::{ReleaseState, ReleaseStatus};
+use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -108,6 +109,7 @@ pub struct Requirements {
 #[derive(Debug, Clone, Deserialize)]
 pub struct ModuleRequirement {
     pub id: String,
+    pub constraint: String,
     pub optional: bool,
 }
 
@@ -423,7 +425,15 @@ impl InstallationPlan {
                     continue;
                 }
                 match (capability.id.as_str(), solus) {
-                    ("runtime.qt6", _) => {
+                    ("runtime.qt6", false) => {
+                        packages.extend([
+                            "qt6-base",
+                            "qt6-declarative",
+                            "qt6-imageformats",
+                            "qt6-wayland",
+                        ]);
+                    }
+                    ("runtime.qt6", true) => {
                         packages.extend(["qt6-base", "qt6-declarative", "qt6-wayland"]);
                     }
                     ("renderer.awww", false) => {
@@ -437,6 +447,21 @@ impl InstallationPlan {
                     }
                     ("gpu.wgpu", true) => {
                         packages.extend(["vulkan", "wayland", "libxkbcommon"]);
+                    }
+                    ("runtime.gtk4", false) => {
+                        packages.insert("gtk4");
+                    }
+                    ("runtime.gtk4", true) => {
+                        packages.insert("libgtk-4");
+                    }
+                    ("runtime.gtk4-layer-shell", _) => {
+                        packages.insert("gtk4-layer-shell");
+                    }
+                    ("audio.pulseaudio-tools", false) => {
+                        packages.insert("libpulse");
+                    }
+                    ("audio.pulseaudio-tools", true) => {
+                        packages.insert("pulseaudio-utils");
                     }
                     ("audio.pipewire", _) => {
                         packages.insert("pipewire");
@@ -1452,7 +1477,7 @@ fn validate_manifest(
     if manifest.product.id != expected_product_id
         || !accepted_repositories
             .iter()
-            .any(|repository| manifest.product.repository == *repository)
+            .any(|repository| manifest.product.repository.eq_ignore_ascii_case(repository))
     {
         return Err(format!(
             "identidad de producto invalida para {}",
@@ -1496,7 +1521,14 @@ fn validate_manifest(
         if !capability.optional
             && !matches!(
                 capability.id.as_str(),
-                "session.wayland" | "runtime.qt6" | "renderer.awww" | "gpu.wgpu" | "audio.pipewire"
+                "session.wayland"
+                    | "runtime.qt6"
+                    | "renderer.awww"
+                    | "gpu.wgpu"
+                    | "audio.pipewire"
+                    | "runtime.gtk4"
+                    | "runtime.gtk4-layer-shell"
+                    | "audio.pulseaudio-tools"
             )
         {
             return Err(format!(
@@ -1574,17 +1606,42 @@ fn version_matches_tag(version: &str, tag: &str) -> bool {
 }
 
 fn validate_module_dependencies(releases: &[PreparedRelease]) -> Result<(), String> {
-    let available = releases
-        .iter()
-        .map(|release| release.manifest.product.id.as_str())
-        .collect::<BTreeSet<_>>();
+    let mut available = BTreeMap::new();
+    for release in releases {
+        let product = &release.manifest.product;
+        let version = Version::parse(&product.version).map_err(|error| {
+            format!(
+                "{}: version invalida {}: {error}",
+                product.id, product.version
+            )
+        })?;
+        available.insert(product.id.as_str(), version);
+    }
     for release in releases {
         for requirement in &release.manifest.requirements.modules {
-            if !requirement.optional && !available.contains(requirement.id.as_str()) {
-                return Err(format!(
-                    "{} requiere el modulo {}",
+            let constraint = VersionReq::parse(&requirement.constraint).map_err(|error| {
+                format!(
+                    "{}: restriccion invalida para {}: {error}",
                     release.manifest.product.id, requirement.id
-                ));
+                )
+            })?;
+            match available.get(requirement.id.as_str()) {
+                Some(version) if !constraint.matches(version) => {
+                    return Err(format!(
+                        "{} requiere {} {}; version seleccionada: {}",
+                        release.manifest.product.id,
+                        requirement.id,
+                        requirement.constraint,
+                        version
+                    ));
+                }
+                None if !requirement.optional => {
+                    return Err(format!(
+                        "{} requiere el modulo {}",
+                        release.manifest.product.id, requirement.id
+                    ));
+                }
+                _ => {}
             }
         }
     }
@@ -1951,14 +2008,107 @@ mod tests {
         let (arch_packages, arch_unsupported) = plan.required_host_packages(false);
         assert_eq!(
             arch_packages,
-            vec!["qt6-base", "qt6-declarative", "qt6-wayland"]
+            vec![
+                "qt6-base",
+                "qt6-declarative",
+                "qt6-imageformats",
+                "qt6-wayland"
+            ]
         );
         assert!(arch_unsupported.is_empty());
 
-        // Los nombres de Qt6 coinciden en Solus, asi que el plan es el mismo.
+        // Preserve the existing Solus package mapping.
         let (solus_packages, solus_unsupported) = plan.required_host_packages(true);
-        assert_eq!(solus_packages, arch_packages);
+        assert_eq!(
+            solus_packages,
+            vec!["qt6-base", "qt6-declarative", "qt6-wayland"]
+        );
         assert!(solus_unsupported.is_empty());
+    }
+
+    #[test]
+    fn kitsune_dependencies_map_to_client_libraries_without_replacing_audio_server() {
+        let mut manifest = test_manifest();
+        manifest.requirements.host_capabilities = serde_json::from_value(serde_json::json!([
+            {"id":"runtime.gtk4", "optional":false},
+            {"id":"runtime.gtk4-layer-shell", "optional":false},
+            {"id":"audio.pulseaudio-tools", "optional":false},
+            {"id":"media.mpris", "optional":true}
+        ]))
+        .unwrap();
+        let plan = InstallationPlan::single(PreparedRelease {
+            component_label: "Kitsune".into(),
+            manifest_url: String::new(),
+            artifact_url: String::new(),
+            manifest,
+        });
+        assert_eq!(
+            plan.required_host_packages(false),
+            (vec!["gtk4", "gtk4-layer-shell", "libpulse"], vec![])
+        );
+        assert_eq!(
+            plan.required_host_packages(true),
+            (
+                vec!["gtk4-layer-shell", "libgtk-4", "pulseaudio-utils"],
+                vec![]
+            )
+        );
+    }
+
+    #[test]
+    #[ignore = "requires GEKKOAPP_KITSUNE_MANIFEST from a generated release"]
+    fn consumes_kitsune_release_and_activates_its_entrypoint() {
+        let manifest_path = PathBuf::from(env::var("GEKKOAPP_KITSUNE_MANIFEST").unwrap());
+        let manifest: ArtifactManifest =
+            serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+        let archive = manifest_path
+            .parent()
+            .unwrap()
+            .join(&manifest.artifact.file_name);
+        let release = PreparedRelease::prepare_verified(
+            ComponentIdentity {
+                label: "Kitsune",
+                product_id: "kitsune",
+                repository: "KitotsuMolina/kitsunev2.0",
+                legacy_repositories: &[],
+            },
+            &manifest.release.tag.clone(),
+            &manifest.platform.target.clone(),
+            "https://example.test/kitsune.manifest.json",
+            "https://example.test/kitsune.tar.zst",
+            manifest,
+        )
+        .unwrap();
+        assert_eq!(
+            sha256_file(&archive).unwrap(),
+            release.manifest.artifact.sha256
+        );
+        let root = env::temp_dir().join(format!(
+            "gekko-kitsune-contract-{}-{}",
+            std::process::id(),
+            now_unix().unwrap()
+        ));
+        let paths = InstallPaths {
+            home: root.clone(),
+            bin_home: root.join("bin"),
+            data_home: root.join("data"),
+            state_home: root.join("state"),
+            cache_home: root.join("cache"),
+            versions_home: root.join("versions"),
+        };
+        fs::create_dir_all(&paths.bin_home).unwrap();
+        let installed = install_version(&release, &archive, &paths).unwrap();
+        let mut state = InstallationState::default();
+        activate_release(&release, &installed, &paths, &mut state).unwrap();
+        assert_eq!(
+            fs::read_link(paths.bin_home.join("kitsune")).unwrap(),
+            installed.join("bin/kitsune")
+        );
+        assert!(state.modules.contains_key("kitsune"));
+        assert!(kiui_runtime_environment(&paths)
+            .unwrap()
+            .contains("KIUI_KITSUNE_BIN="));
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -2493,6 +2643,61 @@ mod tests {
         let mut digest = Sha256::new();
         digest.update(bytes);
         format!("{:x}", digest.finalize())
+    }
+
+    fn dependency_release(id: &str, version: &str) -> PreparedRelease {
+        let mut manifest = test_manifest();
+        manifest.product.id = id.into();
+        manifest.product.version = version.into();
+        PreparedRelease {
+            component_label: ComponentId::Kiui.label().into(),
+            manifest_url: String::new(),
+            artifact_url: String::new(),
+            manifest,
+        }
+    }
+
+    #[test]
+    fn validates_required_and_optional_module_versions_before_installing() {
+        for optional in [false, true] {
+            let mut ui = dependency_release("kiui", "0.2.0");
+            ui.manifest.requirements.modules.push(ModuleRequirement {
+                id: "kitsune-compositor".into(),
+                constraint: ">=0.1.3, <0.2.0".into(),
+                optional,
+            });
+            assert_eq!(
+                validate_module_dependencies(&[ui.clone()]).is_ok(),
+                optional
+            );
+            for (version, compatible) in [
+                ("0.1.2", false),
+                ("0.1.3", true),
+                ("0.1.9", true),
+                ("0.2.0", false),
+                ("0.2.0-rc.1", false),
+                ("invalid", false),
+            ] {
+                let dependency = dependency_release("kitsune-compositor", version);
+                assert_eq!(
+                    validate_module_dependencies(&[ui.clone(), dependency]).is_ok(),
+                    compatible,
+                    "optional={optional}, version={version}"
+                );
+            }
+            ui.manifest.requirements.modules[0].constraint = "invalid".into();
+            assert!(validate_module_dependencies(&[ui]).is_err());
+        }
+    }
+
+    #[test]
+    fn module_constraints_are_required_in_manifests() {
+        assert!(
+            serde_json::from_value::<ModuleRequirement>(serde_json::json!({
+                "id": "kitowall", "optional": true
+            }))
+            .is_err()
+        );
     }
 
     fn test_manifest() -> ArtifactManifest {
