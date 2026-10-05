@@ -17,7 +17,7 @@ async function scenario({ accepted = true, missing = [], password = "", unavaila
     return elements.get(id);
   };
   const calls = [];
-  const plan = { planId: 7, components: ["KiUI 0.2.0", "Kitsune Compositor 0.1.3"],
+  const plan = { planId: 7, components: ["KiUI 0.2.0", "Kito Compositor 0.1.3"],
     packages: ["qt6-base"], missingPackages: missing };
   const catalog = { distroName: "Arch", distroId: "arch", desktop: "niri", session: "wayland",
     compatible: true, kitoUnavailableReason: unavailable ? "Sesion incompatible" : null,

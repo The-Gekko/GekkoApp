@@ -7,13 +7,13 @@ usa el identificador y ejecutable `kitsune` y obtiene los releases estables de
 Está disponible en la selección gráfica y en la opción 4 del menú de terminal.
 Una instalación nueva no lo selecciona automáticamente. Si ya está instalado,
 la interfaz lo marca siguiendo el comportamiento de los demás módulos para
-actualizarlo. KiUI y Kitsune Compositor siguen siendo la base del plan.
+actualizarlo. KiUI y Kito Compositor siguen siendo la base del plan.
 
 El flujo resuelve el release, valida identidad, versión, arquitectura, glibc,
 dependencias entre módulos y capacidades obligatorias. Muestra el plan antes
 de instalar, descarga y verifica los artefactos, instala los paquetes faltantes
 y activa el ejecutable mediante el motor existente. El manifiesto de Kitsune
-requiere Kitsune Compositor `>=0.1.4, <0.2.0`.
+requiere Kito Compositor `>=0.1.4, <0.2.0`.
 
 ## Dependencias
 

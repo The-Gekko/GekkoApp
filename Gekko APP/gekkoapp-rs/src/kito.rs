@@ -14,7 +14,7 @@ pub enum ComponentId {
 impl ComponentId {
     pub fn label(self) -> &'static str {
         match self {
-            Self::Compositor => "Kitsune Compositor",
+            Self::Compositor => "Kito Compositor",
             Self::Kiui => "KiUI",
             Self::Kitowall => "Kitowall (wallpapers estaticos)",
             Self::Kilivepaper => "Kilivepaper (live wallpapers)",

@@ -7,11 +7,11 @@ Tauri de main (GekkoApp 1.3.0), con lógica Rust compartida por GUI y CLI.
 
 GekkoApp instala los componentes Kito seleccionados y sus dependencias faltantes.
 No instala ni configura Niri, Hyprland, DMS, Caelestia o el gestor de login.
-Kitsune (espectro de audio) sigue fuera de esta integración.
+Kitsune (espectro de audio) es un módulo opcional independiente de Kito Compositor.
 
-KiUI es el producto obligatorio. Kitsune Compositor se incluye como dependencia
+KiUI es el producto obligatorio. Kito Compositor se incluye como dependencia
 técnica de KiUI; no sustituye al compositor de escritorio. Kitowall, Kilivepaper
-y KiSDDM son opcionales. GUI y CLI permiten instalar únicamente la base.
+KiSDDM y Kitsune son opcionales. GUI y CLI permiten instalar únicamente la base.
 
 ## Detección y disponibilidad
 

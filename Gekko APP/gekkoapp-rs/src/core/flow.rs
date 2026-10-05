@@ -362,7 +362,7 @@ fn select_kito_modules(
         println!("  {}Obligatorios{}", BOLD, RESET);
         println!("  {}[✓]{} KiUI", FG_GREEN, RESET);
         println!(
-            "  {}[✓]{} Kitsune Compositor (dependencia de KiUI)",
+            "  {}[✓]{} Kito Compositor (dependencia de KiUI)",
             FG_GREEN, RESET
         );
         println!();
